@@ -63,6 +63,36 @@ describe('resolveRequestOwnerId', () => {
     );
   });
 
+  it('uses the configured shared owner across browsers without minting cookies', () => {
+    vi.stubEnv('OPENMAIC_SHARED_OWNER_ID', 'shared:course-library');
+    const firstHeaders = new Headers();
+    const secondHeaders = new Headers();
+
+    expect(resolveRequestOwnerId(new Request('http://localhost/agent'), firstHeaders)).toBe(
+      'shared:course-library',
+    );
+    expect(
+      resolveRequestOwnerId(
+        new Request('http://localhost/agent', {
+          headers: { cookie: 'anonymous_id=a652e716-0e2e-47f5-8432-4ee60f6f0977' },
+        }),
+        secondHeaders,
+      ),
+    ).toBe('shared:course-library');
+    expect(firstHeaders.has('set-cookie')).toBe(false);
+    expect(secondHeaders.has('set-cookie')).toBe(false);
+  });
+
+  it('ignores a blank shared owner configuration', () => {
+    vi.stubEnv('OPENMAIC_SHARED_OWNER_ID', '   ');
+    const responseHeaders = new Headers();
+
+    const ownerId = resolveRequestOwnerId(new Request('http://localhost/agent'), responseHeaders);
+
+    expect(ownerId).toMatch(/^anon:/);
+    expect(responseHeaders.has('set-cookie')).toBe(true);
+  });
+
   it('uses an explicit authenticated owner without minting an anonymous cookie', () => {
     const responseHeaders = new Headers();
 
@@ -76,7 +106,8 @@ describe('resolveRequestOwnerId', () => {
     expect(responseHeaders.has('set-cookie')).toBe(false);
   });
 
-  it('prefers an authenticated owner over an existing anonymous cookie', () => {
+  it('prefers an authenticated owner over shared and anonymous identities', () => {
+    vi.stubEnv('OPENMAIC_SHARED_OWNER_ID', 'shared:course-library');
     const responseHeaders = new Headers();
     const request = new Request('http://localhost/agent', {
       headers: { cookie: 'anonymous_id=a652e716-0e2e-47f5-8432-4ee60f6f0977' },

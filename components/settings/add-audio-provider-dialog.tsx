@@ -13,6 +13,7 @@ export interface NewAudioProviderData {
   name: string;
   baseUrl: string;
   defaultModel: string;
+  defaultVoice?: string;
   requiresApiKey: boolean;
 }
 
@@ -34,6 +35,7 @@ export function AddAudioProviderDialog({
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [defaultModel, setDefaultModel] = useState('');
+  const [defaultVoice, setDefaultVoice] = useState('');
   const [requiresApiKey, setRequiresApiKey] = useState(false);
 
   // Reset form when dialog closes
@@ -44,6 +46,7 @@ export function AddAudioProviderDialog({
       setName('');
       setBaseUrl('');
       setDefaultModel('');
+      setDefaultVoice('');
       setRequiresApiKey(false);
     }
   }
@@ -54,6 +57,7 @@ export function AddAudioProviderDialog({
       name: name.trim(),
       baseUrl: baseUrl.trim(),
       defaultModel: defaultModel.trim(),
+      defaultVoice: type === 'tts' ? defaultVoice.trim() : undefined,
       requiresApiKey,
     });
     onOpenChange(false);
@@ -98,15 +102,26 @@ export function AddAudioProviderDialog({
 
           {/* Default Model — TTS only (ASR models are managed in provider settings) */}
           {type === 'tts' && (
-            <div className="space-y-2">
-              <Label>{t('settings.defaultModel')}</Label>
-              <Input
-                placeholder="tts-1"
-                value={defaultModel}
-                onChange={(e) => setDefaultModel(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">{t('settings.defaultModelHint')}</p>
-            </div>
+            <>
+              <div className="space-y-2">
+                <Label>{t('settings.defaultModel')}</Label>
+                <Input
+                  placeholder="tts-1"
+                  value={defaultModel}
+                  onChange={(e) => setDefaultModel(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">{t('settings.defaultModelHint')}</p>
+              </div>
+              <div className="space-y-2">
+                <Label>{t('settings.defaultVoice')}</Label>
+                <Input
+                  placeholder="zh-CN-XiaoxiaoNeural"
+                  value={defaultVoice}
+                  onChange={(e) => setDefaultVoice(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">{t('settings.defaultVoiceHint')}</p>
+              </div>
+            </>
           )}
 
           <div className="flex items-center space-x-2">
@@ -127,7 +142,7 @@ export function AddAudioProviderDialog({
             <Button
               size="sm"
               onClick={handleAdd}
-              disabled={!name.trim() || !baseUrl.trim()}
+              disabled={!name.trim() || !baseUrl.trim() || (type === 'tts' && !defaultVoice.trim())}
               className="gap-1.5"
             >
               <Plus className="h-3.5 w-3.5" />

@@ -4,6 +4,11 @@ const ANONYMOUS_COOKIE = 'anonymous_id';
 const ANONYMOUS_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+function configuredSharedOwnerId(): string | undefined {
+  const value = process.env.OPENMAIC_SHARED_OWNER_ID?.trim();
+  return value || undefined;
+}
+
 function readCookie(headers: Headers, name: string): string | undefined {
   const encoded = headers.get('cookie');
   if (!encoded) return undefined;
@@ -49,6 +54,11 @@ function anonymousCookieHeader(id: string): string {
  * verbatim: authenticated principals must not be partitioned under a fresh
  * anonymous identity, and no anonymous cookie is minted for them.
  *
+ * For a trusted single-library deployment, OPENMAIC_SHARED_OWNER_ID pins every
+ * unauthenticated request to one stable owner across browsers and devices. It
+ * is intentionally lower priority than an authenticated principal, so a future
+ * account integration cannot accidentally collapse signed-in users together.
+ *
  * Otherwise the identity comes from a valid anonymous cookie, or a fresh UUID
  * is minted. A mint is only useful when it is persisted, so `responseHeaders`
  * — the headers the caller returns to the client — is required: it receives
@@ -66,6 +76,9 @@ export function resolveRequestOwnerId(
   authenticatedOwnerId?: string,
 ): string {
   if (authenticatedOwnerId) return authenticatedOwnerId;
+
+  const sharedOwnerId = configuredSharedOwnerId();
+  if (sharedOwnerId) return sharedOwnerId;
 
   const existingId = readCookie(req.headers, ANONYMOUS_COOKIE);
   if (existingId && UUID_V4.test(existingId)) return `anon:${existingId}`;

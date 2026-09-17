@@ -1319,6 +1319,8 @@
     "addVoice": "إضافة",
     "modelNamePlaceholder": "اختياري",
     "defaultModelHint": "اسم النموذج المُرسل في طلبات API (مثلاً kokoro, tts-1)",
+    "defaultVoice": "الصوت الافتراضي",
+    "defaultVoiceHint": "معرّف الصوت الخاص بالمزوّد الذي يُرسل في طلبات API (مثلاً zh-CN-XiaoxiaoNeural)",
     "noVoicesAdded": "لم تتم إضافة أصوات بعد. أضف أصواتًا أدناه لاختيار صوت لكل وكيل.",
     "noModelsAdded": "لم تتم إضافة نماذج بعد. أضف نماذج أدناه لتمكين اختيار النموذج.",
     "noModelsWarning": "يرجى إضافة نموذج واحد على الأقل أدناه قبل استخدام هذا المزوّد.",

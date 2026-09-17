@@ -1319,6 +1319,8 @@
     "addVoice": "Thêm",
     "modelNamePlaceholder": "Không bắt buộc",
     "defaultModelHint": "Tên model gửi trong yêu cầu API (ví dụ kokoro, tts-1)",
+    "defaultVoice": "Giọng mặc định",
+    "defaultVoiceHint": "ID giọng riêng của nhà cung cấp được gửi trong yêu cầu API (ví dụ: zh-CN-XiaoxiaoNeural)",
     "noVoicesAdded": "Chưa thêm giọng nào. Hãy thêm giọng bên dưới để chọn riêng cho từng tác nhân.",
     "noModelsAdded": "Chưa thêm model nào. Hãy thêm model bên dưới để có thể chọn model.",
     "noModelsWarning": "Vui lòng thêm ít nhất một model bên dưới trước khi dùng nhà cung cấp này.",

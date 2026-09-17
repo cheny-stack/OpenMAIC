@@ -105,6 +105,7 @@ import {
   type VoxCPMProviderOptions,
 } from './voxcpm';
 import { createLogger } from '@/lib/logger';
+import { resolveOpenAIEdgeTTSDefaultVoice } from './openai-edge-tts';
 import { audioProviderFetch } from '@/lib/server/audio-provider-fetch';
 
 const log = createLogger('TTSProviders');
@@ -316,10 +317,15 @@ async function generateOpenAITTS(
   text: string,
   signal: AbortSignal,
 ): Promise<TTSGenerationResult> {
-  const baseUrl = config.baseUrl || TTS_PROVIDERS['openai-tts'].defaultBaseUrl;
+  const baseUrl = (config.baseUrl || TTS_PROVIDERS['openai-tts'].defaultBaseUrl || '').replace(
+    /\/+$/,
+    '',
+  );
+  const speechUrl = baseUrl.endsWith('/audio/speech') ? baseUrl : `${baseUrl}/audio/speech`;
+  const voice = resolveOpenAIEdgeTTSDefaultVoice(baseUrl, config.voice, text);
 
   // Use gpt-4o-mini-tts for best quality and intelligent realtime applications
-  const response = await ttsFetch(config.publicOnly, `${baseUrl}/audio/speech`, {
+  const response = await ttsFetch(config.publicOnly, speechUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -328,7 +334,7 @@ async function generateOpenAITTS(
     body: JSON.stringify({
       model: config.modelId || 'gpt-4o-mini-tts',
       input: text,
-      voice: config.voice,
+      voice,
       speed: config.speed || 1.0,
     }),
     signal,
@@ -336,8 +342,9 @@ async function generateOpenAITTS(
 
   if (!response.ok) {
     throwIfTtsRateLimited('OpenAI', response.status);
-    const error = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(`OpenAI TTS API error: ${error.error?.message || response.statusText}`);
+    throw new Error(
+      `OpenAI TTS API error (${response.status}): ${await readTTSApiError(response)}`,
+    );
   }
 
   return await validateTTSAudioResponse(response, 'OpenAI');
@@ -762,10 +769,15 @@ async function readTTSApiError(response: Response): Promise<string> {
   const text = await response.text().catch(() => response.statusText);
   if (!text) return response.statusText;
   try {
-    const json = JSON.parse(text) as { detail?: unknown; error?: { message?: string } | string };
+    const json = JSON.parse(text) as {
+      details?: unknown;
+      detail?: unknown;
+      error?: { message?: string } | string;
+    };
+    if (typeof json.details === 'string') return json.details;
     if (typeof json.detail === 'string') return json.detail;
+    if (typeof json.error === 'object' && json.error?.message) return json.error.message;
     if (typeof json.error === 'string') return json.error;
-    if (json.error?.message) return json.error.message;
   } catch {
     // Fall through to raw text.
   }

@@ -61,7 +61,9 @@ export async function synthesizeSceneNarration(input: SceneTtsInput): Promise<Sc
   const voice =
     bound?.providerId === providerId && bound.voiceId
       ? bound.voiceId
-      : DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || '';
+      : getServerTTSProviders()[providerId]?.defaultVoice ||
+        DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] ||
+        '';
   const modelId =
     resolveTTSModel(
       providerId,

@@ -50,6 +50,7 @@ function clearTtsEnv() {
     delete process.env[`${prefix}_API_KEY`];
     delete process.env[`${prefix}_BASE_URL`];
     delete process.env[`${prefix}_MODELS`];
+    delete process.env[`${prefix}_VOICE`];
     delete process.env[`${prefix}_ENABLED`];
   }
   delete process.env.TTS_QWEN_VOICE_CLONE_MODEL;
@@ -165,6 +166,41 @@ describe('POST /api/generate/tts missing-key contract (#665)', () => {
 
     expect(res.status).toBe(403);
     expect(json).toMatchObject({ success: false, errorCode: 'INVALID_URL' });
+    expect(mocks.generateTTS).not.toHaveBeenCalled();
+  });
+
+  it('resolves the legacy default voice for openai-edge-tts providers', async () => {
+    const { POST } = await import('@/app/api/generate/tts/route');
+    const res = await POST(
+      ttsRequest({
+        ttsProviderId: 'custom-tts-edge',
+        ttsVoice: 'default',
+        ttsApiKey: 'sk-edge',
+        ttsBaseUrl: 'http://192.169.6.239:5050/v1',
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.generateTTS).toHaveBeenCalledWith(
+      expect.objectContaining({ voice: 'en-US-AriaNeural' }),
+      'Hello',
+    );
+  });
+
+  it('rejects the placeholder voice for other custom providers with an actionable 400', async () => {
+    const { POST } = await import('@/app/api/generate/tts/route');
+    const res = await POST(
+      ttsRequest({
+        ttsProviderId: 'custom-tts-other',
+        ttsVoice: 'default',
+        ttsApiKey: 'sk-other',
+      }),
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json).toMatchObject({ success: false, errorCode: 'INVALID_VOICE' });
+    expect(json.error).toContain('zh-CN-XiaoxiaoNeural');
     expect(mocks.generateTTS).not.toHaveBeenCalled();
   });
 

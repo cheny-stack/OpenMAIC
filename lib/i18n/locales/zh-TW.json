@@ -1304,6 +1304,8 @@
     "addVoice": "新增",
     "modelNamePlaceholder": "選填",
     "defaultModelHint": "API 請求中的模型名（如 kokoro、tts-1）",
+    "defaultVoice": "預設聲線",
+    "defaultVoiceHint": "API 請求中傳送的供應商聲線 ID（如 zh-CN-XiaoxiaoNeural）",
     "noVoicesAdded": "暫無聲線，請在下方新增以支援 Agent 選擇不同聲線。",
     "noModelsAdded": "暫無模型，請在下方新增以支援模型選擇。",
     "noModelsWarning": "請先在下方新增至少一個模型，才能使用此服務。",

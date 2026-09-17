@@ -1319,6 +1319,8 @@
     "addVoice": "Agregar",
     "modelNamePlaceholder": "Opcional",
     "defaultModelHint": "Nombre del modelo enviado en las solicitudes a la API (p. ej. kokoro, tts-1)",
+    "defaultVoice": "Voz predeterminada",
+    "defaultVoiceHint": "ID de voz específico del proveedor enviado en las solicitudes API (p. ej. zh-CN-XiaoxiaoNeural)",
     "noVoicesAdded": "Aún no hay voces agregadas. Agrega voces abajo para seleccionarlas por agente.",
     "noModelsAdded": "Aún no hay modelos agregados. Agrega modelos abajo para habilitar la selección de modelo.",
     "noModelsWarning": "Agrega al menos un modelo abajo antes de usar este proveedor.",

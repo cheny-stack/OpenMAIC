@@ -206,7 +206,7 @@ async function readPersistedState(): Promise<Record<string, unknown>> {
 /** Full server response shape */
 interface MockServerResponse {
   providers?: Record<string, { models?: string[]; baseUrl?: string }>;
-  tts?: Record<string, { baseUrl?: string; disabled?: boolean }>;
+  tts?: Record<string, { baseUrl?: string; disabled?: boolean; defaultVoice?: string }>;
   asr?: Record<string, { baseUrl?: string; disabled?: boolean }>;
   pdf?: Record<string, { baseUrl?: string }>;
   image?: Record<string, { models?: string[]; baseUrl?: string; disabled?: boolean }>;
@@ -753,6 +753,19 @@ describe('fetchServerProviders — TTS stale selection', () => {
     expect(store.getState().ttsProviderId).toBe('browser-native-tts');
   });
 
+  it('auto-selects the first server TTS provider and its pinned voice on first load', async () => {
+    const store = await getStore();
+
+    mockServerResponse({
+      tts: { 'openai-tts': { defaultVoice: 'zh-CN-XiaoxiaoNeural' } },
+    });
+    await store.getState().fetchServerProviders();
+
+    expect(store.getState().ttsProviderId).toBe('openai-tts');
+    expect(store.getState().ttsVoice).toBe('zh-CN-XiaoxiaoNeural');
+    expect(store.getState().ttsEnabled).toBe(true);
+  });
+
   it('falls back to remaining server TTS provider when selected one is removed', async () => {
     const store = await getStore();
 
@@ -777,6 +790,21 @@ describe('fetchServerProviders — TTS stale selection', () => {
     await store.getState().fetchServerProviders();
 
     expect(store.getState().ttsProviderId).toBe('openai-tts');
+  });
+
+  it('keeps and selects the server-pinned default voice', async () => {
+    const store = await getStore();
+
+    mockServerResponse({
+      tts: { 'openai-tts': { defaultVoice: 'zh-CN-XiaoxiaoNeural' } },
+    });
+    await store.getState().fetchServerProviders();
+    store.getState().setTTSProvider('openai-tts');
+
+    expect(store.getState().ttsVoice).toBe('zh-CN-XiaoxiaoNeural');
+    expect(store.getState().ttsProvidersConfig['openai-tts'].serverDefaultVoice).toBe(
+      'zh-CN-XiaoxiaoNeural',
+    );
   });
 });
 

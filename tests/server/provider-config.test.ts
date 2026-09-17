@@ -66,6 +66,7 @@ function clearProviderEnv() {
     delete process.env[`${prefix}_API_KEY`];
     delete process.env[`${prefix}_BASE_URL`];
     delete process.env[`${prefix}_MODELS`];
+    delete process.env[`${prefix}_VOICE`];
     delete process.env[`${prefix}_ENABLED`];
   }
   delete process.env.TAVILY_API_KEY;
@@ -754,6 +755,18 @@ video:
       vi.stubEnv('TTS_OPENAI_API_KEY', 'sk-tts');
       const { getServerTTSProviders } = await import('@/lib/server/provider-config');
       expect(getServerTTSProviders()['openai-tts']).toEqual({});
+    });
+
+    it('exposes and resolves an operator-pinned TTS voice', async () => {
+      vi.stubEnv('TTS_OPENAI_API_KEY', 'sk-tts');
+      vi.stubEnv('TTS_OPENAI_VOICE', 'zh-CN-XiaoxiaoNeural');
+      const { getServerTTSProviders, resolveTTSVoice } =
+        await import('@/lib/server/provider-config');
+
+      expect(getServerTTSProviders()['openai-tts']).toEqual({
+        defaultVoice: 'zh-CN-XiaoxiaoNeural',
+      });
+      expect(resolveTTSVoice('openai-tts')).toBe('zh-CN-XiaoxiaoNeural');
     });
 
     it('force-disables a provider via TTS_<P>_ENABLED=false even when it has a key', async () => {

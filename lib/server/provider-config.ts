@@ -26,6 +26,8 @@ interface ServerProviderEntry {
   apiKey: string;
   baseUrl?: string;
   models?: string[];
+  /** Managed default voice. When set, it is authoritative for this provider. */
+  voice?: string;
   proxy?: string;
   /** Aliyun AccessKey ID (AliDocMind — uses AK/SK instead of a single apiKey). */
   accessKeyId?: string;
@@ -264,6 +266,7 @@ function loadEnvSection(
           apiKey: entry.apiKey || '',
           baseUrl: entry.baseUrl,
           models: normalizeModelList(entry.models),
+          voice: entry.voice?.trim() || undefined,
           proxy: entry.proxy,
         };
       }
@@ -275,6 +278,7 @@ function loadEnvSection(
     const envApiKey = process.env[`${prefix}_API_KEY`] || undefined;
     const envBaseUrl = process.env[`${prefix}_BASE_URL`] || undefined;
     const envModelsStr = process.env[`${prefix}_MODELS`];
+    const envVoice = process.env[`${prefix}_VOICE`]?.trim() || undefined;
     const envModels = envModelsStr
       ? envModelsStr
           .split(',')
@@ -287,6 +291,7 @@ function loadEnvSection(
       if (envApiKey) result[providerId].apiKey = envApiKey;
       if (envBaseUrl) result[providerId].baseUrl = envBaseUrl;
       if (envModels) result[providerId].models = envModels;
+      if (envVoice) result[providerId].voice = envVoice;
       continue;
     }
 
@@ -301,6 +306,7 @@ function loadEnvSection(
       apiKey: envApiKey || '',
       baseUrl: envBaseUrl,
       models: envModels,
+      voice: envVoice,
     };
   }
 
@@ -665,12 +671,22 @@ export function resolveProxy(providerId: string): string | undefined {
  * providers (`{ disabled: true }`). A force-disabled provider is reported as
  * disabled even when it is otherwise configured — disable wins (#665).
  */
-export function getServerTTSProviders(): Record<string, { disabled?: boolean }> {
+export function getServerTTSProviders(): Record<
+  string,
+  { disabled?: boolean; defaultVoice?: string }
+> {
   const cfg = getConfig();
-  const result: Record<string, { disabled?: boolean }> = {};
-  for (const id of Object.keys(cfg.tts)) result[id] = {};
-  for (const id of cfg.disabled.tts) result[id] = { disabled: true };
+  const result: Record<string, { disabled?: boolean; defaultVoice?: string }> = {};
+  for (const [id, entry] of Object.entries(cfg.tts)) {
+    result[id] = entry.voice ? { defaultVoice: entry.voice } : {};
+  }
+  for (const id of cfg.disabled.tts) result[id] = { ...result[id], disabled: true };
   return result;
+}
+
+/** Server-pinned voice for a managed TTS provider, when configured. */
+export function resolveTTSVoice(providerId: string): string | undefined {
+  return getConfig().tts[providerId]?.voice;
 }
 
 /**

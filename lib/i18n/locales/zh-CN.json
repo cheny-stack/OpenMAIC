@@ -1319,6 +1319,8 @@
     "addVoice": "添加",
     "modelNamePlaceholder": "可选",
     "defaultModelHint": "API 请求中的模型名（如 kokoro、tts-1）",
+    "defaultVoice": "默认音色",
+    "defaultVoiceHint": "API 请求中发送的服务商音色 ID（如 zh-CN-XiaoxiaoNeural）",
     "noVoicesAdded": "暂无音色，请在下方添加以支持 Agent 选择不同音色。",
     "noModelsAdded": "暂无模型，请在下方添加以支持模型选择。",
     "noModelsWarning": "请先在下方添加至少一个模型，才能使用此服务。",

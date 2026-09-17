@@ -261,7 +261,14 @@ export function SettingsDialog({ open, onOpenChange, initialSection }: SettingsD
 
   const handleAddTTSProvider = (data: NewAudioProviderData) => {
     const id = `custom-tts-${Date.now()}` as TTSProviderId;
-    addCustomTTSProvider(id, data.name, data.baseUrl, data.requiresApiKey, data.defaultModel);
+    addCustomTTSProvider(
+      id,
+      data.name,
+      data.baseUrl,
+      data.requiresApiKey,
+      data.defaultModel,
+      data.defaultVoice,
+    );
   };
 
   const handleAddASRProvider = (data: NewAudioProviderData) => {

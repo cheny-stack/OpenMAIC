@@ -133,6 +133,8 @@ export interface SettingsState {
       isServerConfigured?: boolean;
       /** Admin/server-level force-off (server-providers.yml / env). Overrides `enabled`. */
       serverDisabled?: boolean;
+      /** Default voice pinned by the server for a managed provider. */
+      serverDefaultVoice?: string;
       // Custom provider fields
       customName?: string;
       customDefaultBaseUrl?: string;
@@ -345,6 +347,7 @@ export interface SettingsState {
     baseUrl: string,
     requiresApiKey: boolean,
     defaultModel?: string,
+    defaultVoice?: string,
   ) => void;
   removeCustomTTSProvider: (id: TTSProviderId) => void;
   addCustomASRProvider: (
@@ -1094,7 +1097,9 @@ export const useSettingsStore = create<SettingsState>()(
             const shouldUpdateVoice = state.ttsProviderId !== providerId;
             const defaultVoice = isCustomTTSProvider(providerId)
               ? state.ttsProvidersConfig[providerId]?.customVoices?.[0]?.id || 'default'
-              : DEFAULT_TTS_VOICES[providerId as BuiltInTTSProviderId] || 'default';
+              : state.ttsProvidersConfig[providerId]?.serverDefaultVoice ||
+                DEFAULT_TTS_VOICES[providerId as BuiltInTTSProviderId] ||
+                'default';
             return {
               ttsProviderId: providerId,
               ...(shouldUpdateVoice && { ttsVoice: defaultVoice }),
@@ -1378,24 +1383,28 @@ export const useSettingsStore = create<SettingsState>()(
         setASREnabled: (enabled) => set({ asrEnabled: enabled }),
 
         // Custom audio provider actions
-        addCustomTTSProvider: (id, name, baseUrl, requiresApiKey, defaultModel) =>
-          set((state) => ({
-            ttsProvidersConfig: {
-              ...state.ttsProvidersConfig,
-              [id]: {
-                apiKey: '',
-                baseUrl: '',
-                enabled: true,
-                modelId: defaultModel || '',
-                customName: name,
-                customDefaultBaseUrl: baseUrl,
-                customVoices: [],
-                isBuiltIn: false,
-                requiresApiKey,
+        addCustomTTSProvider: (id, name, baseUrl, requiresApiKey, defaultModel, defaultVoice) =>
+          set((state) => {
+            const voice = defaultVoice?.trim() || '';
+            return {
+              ttsProvidersConfig: {
+                ...state.ttsProvidersConfig,
+                [id]: {
+                  apiKey: '',
+                  baseUrl: '',
+                  enabled: true,
+                  modelId: defaultModel || '',
+                  customName: name,
+                  customDefaultBaseUrl: baseUrl,
+                  customVoices: voice ? [{ id: voice, name: voice }] : [],
+                  isBuiltIn: false,
+                  requiresApiKey,
+                },
               },
-            },
-            ttsProviderId: id,
-          })),
+              ttsProviderId: id,
+              ...(voice && { ttsVoice: voice }),
+            };
+          }),
 
         removeCustomTTSProvider: (id) =>
           set((state) => {
@@ -1488,7 +1497,7 @@ export const useSettingsStore = create<SettingsState>()(
             // admin/server-level force-off (#665).
             const data = (await res.json()) as {
               providers: Record<string, { models?: string[] }>;
-              tts: Record<string, { disabled?: boolean }>;
+              tts: Record<string, { disabled?: boolean; defaultVoice?: string }>;
               asr: Record<string, { disabled?: boolean }>;
               pdf: Record<string, Record<string, never>>;
               image: Record<string, { models?: string[]; disabled?: boolean }>;
@@ -1560,6 +1569,7 @@ export const useSettingsStore = create<SettingsState>()(
                     ...newTTSConfig[key],
                     isServerConfigured: false,
                     serverDisabled: false,
+                    serverDefaultVoice: undefined,
                   };
                 }
               }
@@ -1570,6 +1580,7 @@ export const useSettingsStore = create<SettingsState>()(
                     ...newTTSConfig[key],
                     isServerConfigured: !info.disabled,
                     serverDisabled: info.disabled === true,
+                    serverDefaultVoice: info.defaultVoice,
                   };
                 }
               }
@@ -1863,7 +1874,9 @@ export const useSettingsStore = create<SettingsState>()(
                 ) {
                   autoTtsProvider = serverTtsIds[0];
                   autoTtsVoice =
-                    DEFAULT_TTS_VOICES[autoTtsProvider as BuiltInTTSProviderId] || 'default';
+                    data.tts[autoTtsProvider]?.defaultVoice ||
+                    DEFAULT_TTS_VOICES[autoTtsProvider as BuiltInTTSProviderId] ||
+                    'default';
                 }
                 // Auto-enable TTS on first run when a server provider exists
                 // (mirrors image/video). No provider ⇒ stays off + CTA.
