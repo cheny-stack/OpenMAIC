@@ -1,7 +1,7 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ['10.10.44.47'],
+  allowedDevOrigins: ['10.10.44.47', '110.42.238.102'],
   output: process.env.VERCEL ? undefined : 'standalone',
   outputFileTracingIncludes: {
     '/*': [
