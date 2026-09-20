@@ -1,0 +1,8 @@
+services:
+  openmaic:
+    environment:
+      # Plain-HTTP deployments need non-Secure cookies for LAN clients.
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      npm_package_version: ${NPM_PACKAGE_VERSION:-0.1.0}
+    volumes:
+      - ${OPENMAIC_DATA_DIR:-./data}:/app/data

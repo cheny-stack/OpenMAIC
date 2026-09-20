@@ -73,7 +73,7 @@ export async function POST(request: Request) {
     sameSite: 'lax',
     path: '/',
     maxAge: ACCESS_TOKEN_MAX_AGE_SECONDS,
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== '0',
   });
 
   return apiSuccess({ valid: true });

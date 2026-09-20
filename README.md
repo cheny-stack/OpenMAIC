@@ -320,6 +320,8 @@ When set, visitors see a password prompt before accessing the app. All API route
 
 The code is remembered in a signed token stored in an HTTP-only cookie for 7 days; the lifetime is enforced server-side, so visitors re-verify after it expires. Verification is rate limited only when `TRUST_PROXY_HEADERS=true` is set: behind a trusted reverse proxy that overwrites `x-forwarded-for` / `x-real-ip`, each client gets its own limit of 10 attempts per 60 seconds, and a successful check clears that client's counter. Without a trusted proxy the app cannot attribute requests to a client, so there is no throttle at all — the length and randomness of the code are the protection.
 
+When serving the app directly over plain HTTP (for example, `http://<server>:3000`), set `COOKIE_SECURE=0` as well. Otherwise browsers on a non-localhost origin will reject the `Secure` authentication cookie and API requests will remain unauthenticated. Leave it unset when TLS terminates in front of the app.
+
 ### Vercel Deployment
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FTHU-MAIC%2FOpenMAIC&envDescription=Configure%20at%20least%20one%20LLM%20provider%20API%20key%20(e.g.%20OPENAI_API_KEY%2C%20ANTHROPIC_API_KEY).%20All%20providers%20are%20optional.&envLink=https%3A%2F%2Fgithub.com%2FTHU-MAIC%2FOpenMAIC%2Fblob%2Fmain%2F.env.example&project-name=openmaic&framework=nextjs)
