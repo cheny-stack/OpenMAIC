@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   engineStart: vi.fn(),
   engineContinuePlayback: vi.fn(),
   handleUserInterrupt: vi.fn(),
+  engineCanJump: false,
+  jumpToAction: vi.fn(),
 }));
 
 const textElement = {
@@ -287,10 +289,10 @@ vi.mock('@/lib/playback', () => ({
       return false;
     }
     canJumpToAction() {
-      return false;
+      return mocks.engineCanJump;
     }
-    jumpToAction() {
-      return Promise.resolve(false);
+    jumpToAction(actionIndex: number, options?: { autoplay?: boolean }) {
+      return mocks.jumpToAction(actionIndex, options);
     }
     handleUserInterrupt(text: string) {
       mocks.handleUserInterrupt(text);
@@ -308,10 +310,6 @@ vi.mock('@/lib/playback', () => ({
   },
   computePlaybackView: () => ({ kind: 'idle', isTopicActive: mocks.topicActive }),
   shouldAutoResumeLecture: () => false,
-}));
-vi.mock('@/lib/playback/action-navigation', () => ({
-  canJumpWithinReconstructablePrefix: () => false,
-  isUnsafePlaybackNavigationAction: () => false,
 }));
 vi.mock('@/lib/playback/action-resume', () => ({
   getActionResumeRestoreCursor: () => ({ actionIndex: 0, position: null }),
@@ -386,6 +384,9 @@ describe('PlaybackChromeRoot element-reference ownership', () => {
     mocks.engineStart.mockReset();
     mocks.engineContinuePlayback.mockReset();
     mocks.handleUserInterrupt.mockReset();
+    mocks.engineCanJump = false;
+    mocks.jumpToAction.mockReset();
+    mocks.jumpToAction.mockResolvedValue(false);
     stageState.scenes = [scene, secondScene];
     stageState.currentSceneId = scene.id;
     stageState.setCurrentSceneId.mockClear();
@@ -424,6 +425,52 @@ describe('PlaybackChromeRoot element-reference ownership', () => {
       await Promise.resolve();
     });
   }
+
+  it('wires paused subtitle navigation to a non-autoplay action jump', async () => {
+    const navigationScene = {
+      ...scene,
+      actions: [
+        { id: 'speech-1', type: 'speech', text: 'First subtitle' },
+        { id: 'speech-2', type: 'speech', text: 'Second subtitle' },
+      ],
+    } as unknown as typeof scene;
+    stageState.scenes = [navigationScene];
+    stageState.currentSceneId = navigationScene.id;
+    mocks.engineCanJump = true;
+    mocks.jumpToAction.mockResolvedValue(true);
+
+    await renderOwner();
+
+    const initialNavigation = mocks.roundtableProps?.subtitleNavigation as
+      | {
+          currentLine: number;
+          totalLines: number;
+          canGoPrevious: boolean;
+          canGoNext: boolean;
+          onNext: () => void;
+        }
+      | undefined;
+    expect(initialNavigation).toMatchObject({
+      currentLine: 1,
+      totalLines: 2,
+      canGoPrevious: false,
+      canGoNext: true,
+    });
+
+    await act(async () => {
+      initialNavigation?.onNext();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.jumpToAction).toHaveBeenCalledWith(1, { autoplay: false });
+    expect(mocks.roundtableProps?.subtitleNavigation).toMatchObject({
+      currentLine: 2,
+      totalLines: 2,
+      canGoPrevious: true,
+      canGoNext: false,
+    });
+  });
 
   it('owns pick state, freezes one request snapshot, and clears only on an accepted receipt', async () => {
     await renderOwner();

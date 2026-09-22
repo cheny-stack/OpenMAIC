@@ -23,6 +23,9 @@ import { PlaybackEngine, computePlaybackView, shouldAutoResumeLecture } from '@/
 import type { EngineMode, TriggerEvent, Effect } from '@/lib/playback';
 import {
   canJumpWithinReconstructablePrefix,
+  getActionLineProgress,
+  getNextSafeSpeechActionIndex,
+  getPreviousSafeSpeechActionIndex,
   isUnsafePlaybackNavigationAction,
 } from '@/lib/playback/action-navigation';
 import {
@@ -1420,10 +1423,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     );
 
     const handleJumpToAction = useCallback(
-      async (sceneId: string, actionIndex: number) => {
+      async (sceneId: string, actionIndex: number, options?: { autoplay?: boolean }) => {
         const engine = engineRef.current;
         if (!engine || sceneId !== currentSceneId || !currentScene) return;
-        const autoplay = engine.getMode() === 'playing';
+        const autoplay = options?.autoplay ?? engine.getMode() === 'playing';
         const jumped = await engine.jumpToAction(actionIndex, { autoplay });
         if (!jumped) return;
         setPlaybackCompleted(false);
@@ -1435,6 +1438,65 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       },
       [currentScene, currentSceneId, updateCurrentPlaybackActionIndex],
     );
+
+    const subtitleNavigationState = useMemo(() => {
+      const actions = currentScene?.actions ?? [];
+      const progress = getActionLineProgress(actions, currentPlaybackActionIndex);
+      if (!currentSceneId || progress.totalLines <= 1) return null;
+
+      const previousActionIndex = getPreviousSafeSpeechActionIndex(
+        actions,
+        currentPlaybackActionIndex,
+      );
+      const nextActionIndex = getNextSafeSpeechActionIndex(actions, currentPlaybackActionIndex);
+
+      return {
+        sceneId: currentSceneId,
+        ...progress,
+        previousActionIndex,
+        nextActionIndex,
+        canGoPrevious:
+          previousActionIndex !== null && canJumpToAction(currentSceneId, previousActionIndex),
+        canGoNext: nextActionIndex !== null && canJumpToAction(currentSceneId, nextActionIndex),
+      };
+    }, [canJumpToAction, currentPlaybackActionIndex, currentScene?.actions, currentSceneId]);
+
+    const subtitleNavigation = useMemo(() => {
+      if (!subtitleNavigationState) return undefined;
+
+      return {
+        currentLine: subtitleNavigationState.currentLine,
+        totalLines: subtitleNavigationState.totalLines,
+        canGoPrevious: subtitleNavigationState.canGoPrevious,
+        canGoNext: subtitleNavigationState.canGoNext,
+        onPrevious: () => {
+          if (
+            !subtitleNavigationState.canGoPrevious ||
+            subtitleNavigationState.previousActionIndex === null
+          ) {
+            return;
+          }
+          void handleJumpToAction(
+            subtitleNavigationState.sceneId,
+            subtitleNavigationState.previousActionIndex,
+            { autoplay: false },
+          );
+        },
+        onNext: () => {
+          if (
+            !subtitleNavigationState.canGoNext ||
+            subtitleNavigationState.nextActionIndex === null
+          ) {
+            return;
+          }
+          void handleJumpToAction(
+            subtitleNavigationState.sceneId,
+            subtitleNavigationState.nextActionIndex,
+            { autoplay: false },
+          );
+        },
+      };
+    }, [handleJumpToAction, subtitleNavigationState]);
 
     // whiteboard toggle
     const handleWhiteboardToggle = () => {
@@ -1838,6 +1900,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 }}
                 totalActions={totalActions}
                 currentActionIndex={currentPlaybackActionIndex ?? 0}
+                subtitleNavigation={subtitleNavigation}
                 currentSceneIndex={currentSceneIndex}
                 scenesCount={totalScenesCount}
                 whiteboardOpen={whiteboardOpen}

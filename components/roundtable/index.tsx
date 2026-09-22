@@ -34,6 +34,11 @@ import { DEFAULT_TEACHER_AVATAR, DEFAULT_USER_AVATAR } from '@/components/roundt
 import type { DiscussionAction } from '@/lib/types/action';
 import type { EngineMode, PlaybackView } from '@/lib/playback';
 import type { Participant } from '@/lib/types/roundtable';
+import {
+  shouldShowSubtitleNavigation,
+  SubtitleNavigationControls,
+  type SubtitleNavigationModel,
+} from './subtitle-navigation';
 
 export interface DiscussionRequest {
   topic: string;
@@ -82,6 +87,7 @@ interface RoundtableProps {
   readonly onDiscussionResume?: () => void;
   readonly totalActions?: number;
   readonly currentActionIndex?: number;
+  readonly subtitleNavigation?: SubtitleNavigationModel;
   // Toolbar props (merged from CanvasArea)
   readonly currentSceneIndex?: number;
   readonly scenesCount?: number;
@@ -185,6 +191,7 @@ export function Roundtable({
   isDiscussionPaused,
   onDiscussionPause,
   onDiscussionResume,
+  subtitleNavigation,
   currentSceneIndex = 0,
   scenesCount = 1,
   whiteboardOpen = false,
@@ -1782,6 +1789,23 @@ export function Roundtable({
                           </p>
                         )}
                       </div>
+
+                      {subtitleNavigation &&
+                        shouldShowSubtitleNavigation(
+                          bubbleRole,
+                          playbackView?.phase,
+                          subtitleNavigation.totalLines,
+                        ) && (
+                          <SubtitleNavigationControls
+                            navigation={subtitleNavigation}
+                            previousLabel={t('roundtable.previousLine')}
+                            nextLabel={t('roundtable.nextLine')}
+                            progressLabel={t('roundtable.lineProgress', {
+                              current: subtitleNavigation.currentLine,
+                              total: subtitleNavigation.totalLines,
+                            })}
+                          />
+                        )}
 
                       {/* Playback state icon (hidden during loading — dots already indicate activity) */}
                       {bubbleRole !== 'user' &&
