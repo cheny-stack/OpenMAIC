@@ -1,0 +1,16 @@
+# Copy this file to .deploy_remote.local, chmod 600 it, and fill in the password.
+SSH_USER="cli"
+SSH_HOST="47.238.125.229"
+SSH_PASSWORD=""
+REMOTE_DIR="/home/cli/workspace/OpenMAIC"
+
+GIT_REMOTE="upstream"
+GIT_BRANCH="main"
+
+# Optional local build settings.
+LOCAL_HTTP_PROXY="http://127.0.0.1:9787"
+COLIMA_CPU="6"
+COLIMA_MEMORY_GB="12"
+COLIMA_DISK_GB="30"
+ALPINE_MIRROR="mirrors.tuna.tsinghua.edu.cn"
+NPM_REGISTRY="https://registry.npmmirror.com"
