@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { secureCookieEnabled } from '../cookie-security';
 import type {
   OwnerAuthMethod,
   OwnerAuthMethodResult,
@@ -46,19 +47,8 @@ function readCookie(headers: Headers, name: string): string | undefined {
   return undefined;
 }
 
-/**
- * Whether the anonymous owner cookie carries `Secure`. Production sets it by
- * default; plain-HTTP deployments opt out with the exact value COOKIE_SECURE=0
- * (Safari refuses to store `Secure` cookies served over plain http://localhost,
- * which makes every request mint a fresh owner and owner-scoped writes fail).
- * Shared by the route and Server Action paths so both entry points agree.
- */
-export function anonymousCookieSecure(): boolean {
-  return process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== '0';
-}
-
 function anonymousCookieHeader(id: string): string {
-  const secure = anonymousCookieSecure() ? '; Secure' : '';
+  const secure = secureCookieEnabled() ? '; Secure' : '';
   return (
     `${ANONYMOUS_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax; ` +
     `Max-Age=${ANONYMOUS_COOKIE_MAX_AGE_SECONDS}${secure}`
@@ -80,7 +70,7 @@ export function readAnonymousOwnerId(headers: Headers): string | undefined {
 
 /** A `Set-Cookie` value that removes the anonymous owner cookie. */
 export function clearAnonymousCookieHeader(): string {
-  const secure = anonymousCookieSecure() ? '; Secure' : '';
+  const secure = secureCookieEnabled() ? '; Secure' : '';
   return `${ANONYMOUS_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
 
@@ -151,7 +141,7 @@ async function authenticateAnonymousContext(): Promise<OwnerAuthMethodResult> {
     sameSite: 'lax',
     path: '/',
     maxAge: ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
-    secure: anonymousCookieSecure(),
+    secure: secureCookieEnabled(),
   });
   return { status: 'authenticated', principal: anonymousPrincipal(minted, 'minted') };
 }

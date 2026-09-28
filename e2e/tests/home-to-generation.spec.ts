@@ -50,6 +50,7 @@ test.describe('Home → Generation', () => {
     await home.goto();
 
     // Core elements visible
+    await expect(page).toHaveTitle('OpenMAIC-CLI');
     await expect(home.logo).toBeVisible();
     await expect(home.textarea).toBeVisible();
     await expect(home.enterButton).toBeDisabled();

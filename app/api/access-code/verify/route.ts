@@ -6,6 +6,7 @@ import { createAccessToken } from '@/lib/server/access-token';
 import { accessCodeAttemptLimiter } from '@/lib/server/attempt-limiter';
 import { clientIdentity, isTrustedProxyIdentity } from '@/lib/server/client-identity';
 import { warnIfAccessCodeIsShort } from '@/lib/server/access-code-warning';
+import { secureCookieEnabled } from '@/lib/server/cookie-security';
 
 /**
  * Pull the candidate code out of an already-parsed JSON body. Anything that is
@@ -73,7 +74,7 @@ export async function POST(request: Request) {
     sameSite: 'lax',
     path: '/',
     maxAge: ACCESS_TOKEN_MAX_AGE_SECONDS,
-    secure: process.env.NODE_ENV === 'production',
+    secure: secureCookieEnabled(),
   });
 
   return apiSuccess({ valid: true });

@@ -7,10 +7,21 @@ REMOTE_DIR="/home/cli/workspace/OpenMAIC"
 GIT_REMOTE="upstream"
 GIT_BRANCH="main"
 
-# Optional local build settings.
+# Optional local build settings. The dedicated Colima profile is stopped after
+# each run, but its BuildKit and pnpm caches are retained. To reset it manually:
+# colima delete openmaic-deploy
 LOCAL_HTTP_PROXY="http://127.0.0.1:9787"
+COLIMA_PROFILE="openmaic-deploy"
 COLIMA_CPU="6"
 COLIMA_MEMORY_GB="12"
 COLIMA_DISK_GB="30"
 ALPINE_MIRROR="mirrors.tuna.tsinghua.edu.cn"
 NPM_REGISTRY="https://registry.npmmirror.com"
+
+# Reuse an existing commit-tagged image on the server by default. Set to 1 to
+# rebuild the same commit, for example after intentionally refreshing base images.
+DEPLOY_FORCE_REBUILD="0"
+
+# The deployment currently exposes http://<host>:3000 directly. Keep 0 when
+# there is no HTTPS reverse proxy; use 1 only when TLS terminates before the app.
+REMOTE_COOKIE_SECURE="0"

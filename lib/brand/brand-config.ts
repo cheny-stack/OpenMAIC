@@ -25,9 +25,9 @@ export interface BrandConfig {
 
 /** The default brand: the product itself, with no vendor overrides. */
 export const DEFAULT_BRAND: BrandConfig = {
-  productName: 'OpenMAIC',
-  shortName: 'OpenMAIC',
-  logoSrc: '/logo-horizontal.png',
+  productName: 'OpenMAIC-CLI',
+  shortName: 'OpenMAIC-CLI',
+  logoSrc: '/logo-horizontal-cli.svg',
   logoHasWordmark: true,
   markSrc: '/openmaic-mark.png',
   themeColor: '#722ed1',

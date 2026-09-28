@@ -60,6 +60,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   delete process.env.ACCESS_CODE;
   delete process.env.TRUST_PROXY_HEADERS;
 });
@@ -212,6 +213,27 @@ describe('POST /api/access-code/verify — cookie', () => {
     expect(mocks.cookieSet).toHaveBeenCalledTimes(1);
     const [, , options] = mocks.cookieSet.mock.calls[0];
     expect(options.maxAge).toBe(ACCESS_TOKEN_MAX_AGE_SECONDS);
+  });
+
+  it('marks the access cookie Secure in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const POST = await loadPost();
+
+    await POST(verifyRequest(ACCESS_CODE));
+
+    const [, , options] = mocks.cookieSet.mock.calls[0];
+    expect(options.secure).toBe(true);
+  });
+
+  it('honors COOKIE_SECURE=0 for production deployments served over plain HTTP', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('COOKIE_SECURE', '0');
+    const POST = await loadPost();
+
+    await POST(verifyRequest(ACCESS_CODE));
+
+    const [, , options] = mocks.cookieSet.mock.calls[0];
+    expect(options.secure).toBe(false);
   });
 });
 

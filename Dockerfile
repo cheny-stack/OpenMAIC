@@ -31,11 +31,10 @@ ARG NPM_REGISTRY
 # Native build tools for sharp, @napi-rs/canvas
 RUN apk add --no-cache python3 build-base g++ cairo-dev pango-dev jpeg-dev giflib-dev librsvg-dev
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/ ./packages/
-COPY scripts/ ./scripts/
-
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+# Fetching from the lockfile is independent of application and workspace source.
+# Keep this layer narrow so source-only changes do not trigger network access.
+COPY pnpm-lock.yaml ./
+RUN --mount=type=cache,id=openmaic-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
     npm_registry="$NPM_REGISTRY"; \
     while [ "${npm_registry%/}" != "$npm_registry" ]; do \
       npm_registry="${npm_registry%/}"; \
@@ -43,7 +42,22 @@ RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     if [ -n "$npm_registry" ]; then \
       pnpm config set registry "$npm_registry"; \
     fi && \
-    pnpm install --frozen-lockfile --ignore-scripts
+    pnpm fetch --frozen-lockfile
+
+# pnpm needs only workspace manifests to link the already-fetched packages.
+# Workspace source is copied later in the builder stage.
+COPY package.json pnpm-workspace.yaml ./
+COPY packages/mathml2omml/package.json ./packages/mathml2omml/package.json
+COPY packages/pptxgenjs/package.json ./packages/pptxgenjs/package.json
+COPY packages/@openmaic/dsl/package.json ./packages/@openmaic/dsl/package.json
+COPY packages/@openmaic/generation/package.json ./packages/@openmaic/generation/package.json
+COPY packages/@openmaic/storage/package.json ./packages/@openmaic/storage/package.json
+COPY packages/@openmaic/importer/package.json ./packages/@openmaic/importer/package.json
+COPY packages/@openmaic/renderer/package.json ./packages/@openmaic/renderer/package.json
+COPY packages/@openmaic/editor/package.json ./packages/@openmaic/editor/package.json
+
+RUN --mount=type=cache,id=openmaic-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    pnpm install --offline --frozen-lockfile --ignore-scripts
 
 # ---- Stage 3: Builder ----
 FROM base AS builder
