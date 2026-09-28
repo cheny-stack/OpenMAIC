@@ -35,6 +35,7 @@ const ENV_PREFIXES_TO_CLEAR = [
   'TTS_DOUBAO',
   'TTS_ELEVENLABS',
   'TTS_MINIMAX',
+  'TTS_MIMO',
   'TTS_VOXCPM',
   'ASR_OPENAI',
   'ASR_QWEN',
@@ -767,6 +768,45 @@ video:
         defaultVoice: 'zh-CN-XiaoxiaoNeural',
       });
       expect(resolveTTSVoice('openai-tts')).toBe('zh-CN-XiaoxiaoNeural');
+    });
+
+    it('resolves MiMo env credentials, endpoint, model, and voice', async () => {
+      vi.stubEnv('TTS_MIMO_API_KEY', 'sk-mimo');
+      vi.stubEnv('TTS_MIMO_BASE_URL', 'https://gateway.example.com/v1');
+      vi.stubEnv('TTS_MIMO_MODELS', 'mimo-v2.5-tts');
+      vi.stubEnv('TTS_MIMO_VOICE', 'mimo_default');
+      const {
+        getServerTTSProviders,
+        resolveTTSApiKey,
+        resolveTTSBaseUrl,
+        resolveTTSModel,
+        resolveTTSVoice,
+      } = await import('@/lib/server/provider-config');
+
+      expect(getServerTTSProviders()['mimo-tts']).toEqual({ defaultVoice: 'mimo_default' });
+      expect(resolveTTSApiKey('mimo-tts')).toBe('sk-mimo');
+      expect(resolveTTSBaseUrl('mimo-tts')).toBe('https://gateway.example.com/v1');
+      expect(resolveTTSModel('mimo-tts', 'client-model')).toBe('mimo-v2.5-tts');
+      expect(resolveTTSVoice('mimo-tts')).toBe('mimo_default');
+    });
+
+    it('supports YAML MiMo config and lets env fields override it', async () => {
+      yamlOverride = [
+        'tts:',
+        '  mimo-tts:',
+        '    apiKey: sk-yaml',
+        '    baseUrl: https://yaml.example.com/v1',
+        '    models: [mimo-v2.5-tts]',
+        '    voice: Mia',
+        '',
+      ].join('\n');
+      vi.stubEnv('TTS_MIMO_VOICE', 'mimo_default');
+      const { resolveTTSApiKey, resolveTTSBaseUrl, resolveTTSVoice } =
+        await import('@/lib/server/provider-config');
+
+      expect(resolveTTSApiKey('mimo-tts')).toBe('sk-yaml');
+      expect(resolveTTSBaseUrl('mimo-tts')).toBe('https://yaml.example.com/v1');
+      expect(resolveTTSVoice('mimo-tts')).toBe('mimo_default');
     });
 
     it('force-disables a provider via TTS_<P>_ENABLED=false even when it has a key', async () => {

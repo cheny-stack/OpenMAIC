@@ -200,6 +200,17 @@ OPENAI_API_KEY=sk-...
 DEFAULT_MODEL=openai:gpt-5.5
 ```
 
+MiMo V2.5 TTS 快速示例：
+
+```env
+TTS_MIMO_API_KEY=sk-...
+TTS_MIMO_BASE_URL=https://api.xiaomimimo.com/v1
+TTS_MIMO_MODELS=mimo-v2.5-tts
+TTS_MIMO_VOICE=mimo_default
+```
+
+也可以在 **设置 → 语音合成 → MiMo TTS** 中为当前用户单独配置。
+
 MiniMax 快速示例：
 
 ```env

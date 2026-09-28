@@ -787,6 +787,29 @@ export const TTS_PROVIDERS: Record<BuiltInTTSProviderId, TTSProviderConfig> = {
     },
   },
 
+  'mimo-tts': {
+    id: 'mimo-tts',
+    name: 'MiMo TTS',
+    requiresApiKey: true,
+    defaultBaseUrl: 'https://api.xiaomimimo.com/v1',
+    icon: '/logos/xiaomi.svg',
+    models: [{ id: 'mimo-v2.5-tts', name: 'MiMo V2.5 TTS' }],
+    defaultModelId: 'mimo-v2.5-tts',
+    voices: [
+      { id: 'mimo_default', name: 'MiMo Default', language: 'zh-CN', gender: 'neutral' },
+      { id: '冰糖', name: '冰糖', language: 'zh-CN', gender: 'female' },
+      { id: '茉莉', name: '茉莉', language: 'zh-CN', gender: 'female' },
+      { id: '苏打', name: '苏打', language: 'zh-CN', gender: 'male' },
+      { id: '白桦', name: '白桦', language: 'zh-CN', gender: 'male' },
+      { id: 'Mia', name: 'Mia', language: 'en-US', gender: 'female' },
+      { id: 'Chloe', name: 'Chloe', language: 'en-US', gender: 'female' },
+      { id: 'Milo', name: 'Milo', language: 'en-US', gender: 'male' },
+      { id: 'Dean', name: 'Dean', language: 'en-US', gender: 'male' },
+    ],
+    supportedFormats: ['wav'],
+    speedRange: { min: 0.5, max: 2.0, default: 1.0 },
+  },
+
   'voxcpm-tts': {
     id: VOXCPM_TTS_PROVIDER_ID,
     name: 'VoxCPM2',
@@ -1342,6 +1365,7 @@ export const DEFAULT_TTS_VOICES: Record<BuiltInTTSProviderId, string> = {
   'doubao-tts': 'zh_female_vv_uranus_bigtts',
   'elevenlabs-tts': 'EXAVITQu4vr4xnSDxMaL',
   'minimax-tts': 'female-yujie',
+  'mimo-tts': 'mimo_default',
   'lemonade-tts': 'af_heart',
   'browser-native-tts': 'default',
 };
@@ -1355,6 +1379,7 @@ export const DEFAULT_TTS_MODELS: Record<BuiltInTTSProviderId, string> = {
   'doubao-tts': '',
   'elevenlabs-tts': 'eleven_multilingual_v2',
   'minimax-tts': 'speech-2.8-hd',
+  'mimo-tts': 'mimo-v2.5-tts',
   'lemonade-tts': 'kokoro-v1',
   'browser-native-tts': '',
 };

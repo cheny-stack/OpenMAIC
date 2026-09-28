@@ -543,6 +543,7 @@ const getDefaultAudioConfig = () => ({
     'doubao-tts': { apiKey: '', baseUrl: '', enabled: true },
     'elevenlabs-tts': { apiKey: '', baseUrl: '', enabled: true },
     'minimax-tts': { apiKey: '', baseUrl: '', modelId: 'speech-2.8-hd', enabled: true },
+    'mimo-tts': { apiKey: '', baseUrl: '', modelId: 'mimo-v2.5-tts', enabled: true },
     'lemonade-tts': {
       apiKey: '',
       baseUrl: '',

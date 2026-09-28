@@ -1403,6 +1403,7 @@
     "providerDoubaoTTS": "Doubao TTS 2.0 (Volcengine)",
     "providerElevenLabsTTS": "ElevenLabs TTS",
     "providerMiniMaxTTS": "MiniMax TTS",
+    "providerMimoTTS": "MiMo TTS",
     "providerLemonadeTTS": "Lemonade TTS (Cục bộ)",
     "providerBrowserNativeTTS": "Giọng đọc sẵn có của trình duyệt",
     "voxcpmBackend": "Máy chủ xử lý",

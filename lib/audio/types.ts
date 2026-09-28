@@ -88,6 +88,7 @@ export type BuiltInTTSProviderId =
   | 'doubao-tts'
   | 'elevenlabs-tts'
   | 'minimax-tts'
+  | 'mimo-tts'
   | 'lemonade-tts'
   | 'browser-native-tts';
 

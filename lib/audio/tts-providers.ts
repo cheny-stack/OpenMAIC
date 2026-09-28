@@ -276,6 +276,8 @@ export async function generateTTS(
 
       case 'minimax-tts':
         return await generateMiniMaxTTS(config, text, signal);
+      case 'mimo-tts':
+        return await generateMimoTTS(config, text, signal);
       case 'doubao-tts':
         return await generateDoubaoTTS(config, text, signal);
       case 'elevenlabs-tts':
@@ -1035,6 +1037,105 @@ async function generateMiniMaxTTS(
     audio,
     format: data?.extra_info?.audio_format || config.format || 'mp3',
   };
+}
+
+/**
+ * MiMo V2.5 TTS implementation (OpenAI-compatible chat completions).
+ *
+ * MiMo receives delivery direction in the user message and the exact speech in
+ * the assistant message. The non-streaming response returns Base64 WAV bytes
+ * at `choices[0].message.audio.data`.
+ */
+async function generateMimoTTS(
+  config: TTSModelConfig,
+  text: string,
+  signal: AbortSignal,
+): Promise<TTSGenerationResult> {
+  const baseUrl = (config.baseUrl || TTS_PROVIDERS['mimo-tts'].defaultBaseUrl || '').replace(
+    /\/+$/,
+    '',
+  );
+  const endpoint = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+
+  const response = await ttsFetch(config.publicOnly, endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({
+      model: config.modelId || TTS_PROVIDERS['mimo-tts'].defaultModelId,
+      messages: [
+        { role: 'user', content: mimoDeliveryInstruction(config.speed) },
+        { role: 'assistant', content: text },
+      ],
+      audio: {
+        format: 'wav',
+        voice: config.voice || TTS_PROVIDERS['mimo-tts'].voices[0].id,
+      },
+      stream: false,
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    throwIfTtsRateLimited('MiMo', response.status);
+    throw new Error(`MiMo TTS API error (${response.status}): ${await readTTSApiError(response)}`);
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned malformed JSON');
+  }
+
+  const audioBase64 = (
+    data as {
+      choices?: Array<{ message?: { audio?: { data?: unknown } } }>;
+    }
+  )?.choices?.[0]?.message?.audio?.data;
+  if (typeof audioBase64 !== 'string' || !audioBase64.trim()) {
+    throw new TTSInvalidResponseError(
+      'MiMo',
+      'MiMo TTS response is missing choices[0].message.audio.data',
+    );
+  }
+
+  return {
+    audio: decodeMimoAudio(audioBase64),
+    format: 'wav',
+  };
+}
+
+/** Keep speed natural-language because MiMo exposes delivery through messages. */
+function mimoDeliveryInstruction(speed?: number): string {
+  const normalized = speed && Number.isFinite(speed) ? speed : 1;
+  if (Math.abs(normalized - 1) < 0.01) return 'Speak naturally and clearly.';
+  if (normalized < 1) {
+    return `Speak naturally and clearly at a slower pace, about ${normalized.toFixed(2)} times normal speed.`;
+  }
+  return `Speak naturally and clearly at a faster pace, about ${normalized.toFixed(2)} times normal speed.`;
+}
+
+function decodeMimoAudio(value: string): Uint8Array {
+  const compact = value.replace(/\s/g, '');
+  if (!compact || compact.length % 4 === 1 || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
+    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned invalid Base64 audio data');
+  }
+
+  const audio = new Uint8Array(Buffer.from(compact, 'base64'));
+  if (audio.length === 0) {
+    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned empty audio data');
+  }
+  if (
+    audio.length < 12 ||
+    Buffer.from(audio.subarray(0, 4)).toString('ascii') !== 'RIFF' ||
+    Buffer.from(audio.subarray(8, 12)).toString('ascii') !== 'WAVE'
+  ) {
+    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned invalid WAV audio data');
+  }
+  return audio;
 }
 
 /**

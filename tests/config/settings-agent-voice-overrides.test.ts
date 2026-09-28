@@ -125,6 +125,30 @@ describe('agentSelectionIsUserSet', () => {
   });
 });
 
+describe('built-in audio provider backfill', () => {
+  beforeEach(() => storage.clear());
+
+  it('adds MiMo TTS to persisted settings from before the provider existed', async () => {
+    const store = await freshStore({
+      ttsProvidersConfig: {
+        'openai-tts': { apiKey: 'sk-existing', baseUrl: '', enabled: true },
+      },
+    });
+
+    expect(store.getState().ttsProvidersConfig['openai-tts']).toEqual({
+      apiKey: 'sk-existing',
+      baseUrl: '',
+      enabled: true,
+    });
+    expect(store.getState().ttsProvidersConfig['mimo-tts']).toEqual({
+      apiKey: '',
+      baseUrl: '',
+      modelId: 'mimo-v2.5-tts',
+      enabled: true,
+    });
+  });
+});
+
 describe('Qwen voice/model self-healing', () => {
   it('repairs a persisted VC-model plus catalog-voice wedge', async () => {
     const store = await freshStore();

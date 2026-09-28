@@ -1403,6 +1403,7 @@
     "providerDoubaoTTS": "Doubao TTS 2.0 (فولكينجين)",
     "providerElevenLabsTTS": "ElevenLabs TTS",
     "providerMiniMaxTTS": "MiniMax TTS",
+    "providerMimoTTS": "MiMo TTS",
     "providerLemonadeTTS": "Lemonade TTS (محلي)",
     "providerBrowserNativeTTS": "تحويل النص إلى كلام المدمج في المتصفح",
     "voxcpmBackend": "الخلفية",

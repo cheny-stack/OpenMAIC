@@ -219,6 +219,17 @@ OPENAI_API_KEY=sk-...
 DEFAULT_MODEL=openai:gpt-5.5
 ```
 
+MiMo V2.5 TTS quick example:
+
+```env
+TTS_MIMO_API_KEY=sk-...
+TTS_MIMO_BASE_URL=https://api.xiaomimimo.com/v1
+TTS_MIMO_MODELS=mimo-v2.5-tts
+TTS_MIMO_VOICE=mimo_default
+```
+
+You can also configure these values per user under **Settings → Speech Synthesis → MiMo TTS**.
+
 MiniMax quick examples:
 
 ```env

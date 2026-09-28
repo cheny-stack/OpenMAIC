@@ -96,6 +96,7 @@ const TTS_ENV_MAP: Record<string, string> = {
   TTS_DOUBAO: 'doubao-tts',
   TTS_ELEVENLABS: 'elevenlabs-tts',
   TTS_MINIMAX: 'minimax-tts',
+  TTS_MIMO: 'mimo-tts',
   TTS_LEMONADE: 'lemonade-tts',
 };
 

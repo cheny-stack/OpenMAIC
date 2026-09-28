@@ -41,6 +41,7 @@ const TTS_ENV_PREFIXES = [
   'TTS_DOUBAO',
   'TTS_ELEVENLABS',
   'TTS_MINIMAX',
+  'TTS_MIMO',
   'TTS_LEMONADE',
   'TTS_BROWSER_NATIVE',
 ];
@@ -105,6 +106,16 @@ describe('POST /api/generate/tts missing-key contract (#665)', () => {
     expect(mocks.generateTTS).not.toHaveBeenCalled();
   });
 
+  it('returns 400 MISSING_API_KEY for MiMo without a server or client key', async () => {
+    const { POST } = await import('@/app/api/generate/tts/route');
+    const res = await POST(ttsRequest({ ttsProviderId: 'mimo-tts', ttsVoice: 'mimo_default' }));
+    const json = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(json).toMatchObject({ success: false, errorCode: 'MISSING_API_KEY' });
+    expect(mocks.generateTTS).not.toHaveBeenCalled();
+  });
+
   it('uses a server-configured key (managed provider) so no client key is needed', async () => {
     yamlOverride = 'tts:\n  openai-tts:\n    apiKey: sk-server\n';
     const { POST } = await import('@/app/api/generate/tts/route');
@@ -132,6 +143,71 @@ describe('POST /api/generate/tts missing-key contract (#665)', () => {
       expect.objectContaining({ providerId: 'openai-tts', apiKey: 'client-key' }),
       'Hello',
     );
+  });
+
+  it('accepts a client-supplied MiMo key and defaults to the built-in endpoint', async () => {
+    const { POST } = await import('@/app/api/generate/tts/route');
+    const res = await POST(
+      ttsRequest({
+        ttsProviderId: 'mimo-tts',
+        ttsVoice: 'mimo_default',
+        ttsApiKey: 'sk-mimo',
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.generateTTS).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'mimo-tts',
+        apiKey: 'sk-mimo',
+        baseUrl: 'https://api.xiaomimimo.com/v1',
+        voice: 'mimo_default',
+      }),
+      'Hello',
+    );
+  });
+
+  it('lets server-pinned MiMo model and voice override the client', async () => {
+    vi.stubEnv('TTS_MIMO_API_KEY', 'sk-server');
+    vi.stubEnv('TTS_MIMO_MODELS', 'mimo-v2.5-tts');
+    vi.stubEnv('TTS_MIMO_VOICE', '茉莉');
+    const { POST } = await import('@/app/api/generate/tts/route');
+    const res = await POST(
+      ttsRequest({
+        ttsProviderId: 'mimo-tts',
+        ttsModelId: 'client-model',
+        ttsVoice: 'Chloe',
+        ttsApiKey: 'client-key',
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.generateTTS).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'mimo-tts',
+        apiKey: 'sk-server',
+        modelId: 'mimo-v2.5-tts',
+        voice: '茉莉',
+      }),
+      'Hello',
+    );
+  });
+
+  it('force-disables MiMo even when a client key is supplied', async () => {
+    vi.stubEnv('TTS_MIMO_ENABLED', 'false');
+    const { POST } = await import('@/app/api/generate/tts/route');
+    const res = await POST(
+      ttsRequest({
+        ttsProviderId: 'mimo-tts',
+        ttsVoice: 'mimo_default',
+        ttsApiKey: 'sk-mimo',
+      }),
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(json).toMatchObject({ success: false, errorCode: 'PROVIDER_DISABLED' });
+    expect(mocks.generateTTS).not.toHaveBeenCalled();
   });
 
   it('does not pre-empt keyless providers (e.g. voxcpm-tts) with the key guard', async () => {
