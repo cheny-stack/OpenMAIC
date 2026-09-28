@@ -25,6 +25,7 @@ import {
   destroyAudioProviderDispatchersForTests,
 } from '@/lib/server/audio-provider-fetch';
 import { validateUrlForSSRFWithPolicy } from '@/lib/server/ssrf-guard';
+import { REDIRECT_REQUIRES_HTTPS_MESSAGE } from '@/lib/server/fetch-with-redirect-validation';
 
 const dnsMocks = vi.hoisted(() => ({
   // Used by the URL-layer guard (`node:dns` promises API).
@@ -71,6 +72,7 @@ interface LoopbackServer {
   port: number;
   requests: () => number;
   lastHeaders: () => IncomingMessage['headers'] | undefined;
+  lastBody: () => Buffer | undefined;
 }
 
 async function startLoopback(
@@ -78,15 +80,21 @@ async function startLoopback(
 ): Promise<LoopbackServer> {
   let count = 0;
   let headers: IncomingMessage['headers'] | undefined;
+  let body: Buffer | undefined;
   const server = createServer((req, res) => {
     count += 1;
     headers = req.headers;
-    if (handler) {
-      handler(req, res);
-      return;
-    }
-    res.writeHead(200, { 'Content-Type': 'audio/wav' });
-    res.end(Buffer.from([1, 2, 3, 4]));
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      if (chunks.length > 0) body = Buffer.concat(chunks);
+      if (handler) {
+        handler(req, res);
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'audio/wav' });
+      res.end(Buffer.from([1, 2, 3, 4]));
+    });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   servers.push(server);
@@ -94,6 +102,7 @@ async function startLoopback(
     port: (server.address() as AddressInfo).port,
     requests: () => count,
     lastHeaders: () => headers,
+    lastBody: () => body,
   };
 }
 
@@ -146,30 +155,56 @@ describe('audioProviderFetch — redirect + rebinding hardening', () => {
       res.end();
     });
 
+    // The loopback origin needs the local-network opt-in; metadata stays
+    // refused under every policy.
     await expect(
       audioProviderFetch(`http://127.0.0.1:${origin.port}/start`, undefined, {
-        allowLocalNetworks: false,
+        allowLocalNetworks: true,
       }),
     ).rejects.toThrow(METADATA_BLOCK_MESSAGE);
 
     expect(origin.requests()).toBe(1);
   });
 
-  it('refuses a 302 to a loopback address under the strict public policy', async () => {
+  it('refuses an IP-literal loopback origin under the strict public policy without connecting', async () => {
+    // Node never runs `connect.lookup` for an IP literal, so the transport
+    // must judge the host itself before the request.
     const internal = await startLoopback();
-    const origin = await startLoopback((_req, res) => {
-      res.writeHead(302, { Location: `http://127.0.0.1:${internal.port}/secret` });
-      res.end();
-    });
 
     await expect(
-      audioProviderFetch(`http://127.0.0.1:${origin.port}/start`, undefined, {
+      audioProviderFetch(`http://127.0.0.1:${internal.port}/secret`, undefined, {
         allowLocalNetworks: false,
       }),
     ).rejects.toThrow(PRIVATE_BLOCK_MESSAGE);
+    await expect(
+      audioProviderFetch(`http://[::1]:${internal.port}/secret`, undefined, {
+        allowLocalNetworks: false,
+        rejectRedirects: true,
+      }),
+    ).rejects.toThrow(PRIVATE_BLOCK_MESSAGE);
 
-    expect(origin.requests()).toBe(1);
     expect(internal.requests()).toBe(0);
+  });
+
+  it('refuses a loopback origin under the operator policy when the opt-in is unset', async () => {
+    const internal = await startLoopback();
+
+    await expect(
+      audioProviderFetch(`http://127.0.0.1:${internal.port}/secret`, undefined, {
+        rejectRedirects: true,
+      }),
+    ).rejects.toThrow(PRIVATE_BLOCK_MESSAGE);
+
+    expect(internal.requests()).toBe(0);
+  });
+
+  it('refuses a metadata IP-literal origin even when local networks are allowed', async () => {
+    await expect(
+      audioProviderFetch('http://169.254.169.254/latest/meta-data/', undefined, {
+        allowLocalNetworks: true,
+        rejectRedirects: true,
+      }),
+    ).rejects.toThrow(METADATA_BLOCK_MESSAGE);
   });
 
   it('follows a 302 to a loopback address when the operator policy allows local networks', async () => {
@@ -189,6 +224,44 @@ describe('audioProviderFetch — redirect + rebinding hardening', () => {
     expect(response.status).toBe(200);
     await expect(response.text()).resolves.toBe('{"ok":true}');
     expect(internal.requests()).toBe(1);
+  });
+
+  it('still follows HTTP redirect hops when requireHttps is off (audio default)', async () => {
+    const internal = await startLoopback((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{"ok":true}');
+    });
+    const origin = await startLoopback((_req, res) => {
+      res.writeHead(302, { Location: `http://127.0.0.1:${internal.port}/final` });
+      res.end();
+    });
+
+    // No `requireHttps`, so the http hop is still followed under the opt-in —
+    // proving the new field is opt-in and does not change audio behavior.
+    const response = await audioProviderFetch(`http://127.0.0.1:${origin.port}/start`, undefined, {
+      allowLocalNetworks: true,
+    });
+
+    expect(response.status).toBe(200);
+    expect(internal.requests()).toBe(1);
+  });
+
+  it('refuses an HTTP redirect hop when requireHttps is set', async () => {
+    const internal = await startLoopback();
+    const origin = await startLoopback((_req, res) => {
+      res.writeHead(302, { Location: `http://127.0.0.1:${internal.port}/final` });
+      res.end();
+    });
+
+    await expect(
+      audioProviderFetch(`http://127.0.0.1:${origin.port}/start`, undefined, {
+        allowLocalNetworks: true,
+        requireHttps: true,
+      }),
+    ).rejects.toThrow(REDIRECT_REQUIRES_HTTPS_MESSAGE);
+
+    expect(origin.requests()).toBe(1);
+    expect(internal.requests()).toBe(0);
   });
 
   it('refuses a hostname that rebinds to loopback between guard and connect', async () => {
@@ -247,5 +320,140 @@ describe('audioProviderFetch — redirect + rebinding hardening', () => {
     expect(headers['ocp-apim-subscription-key']).toBeUndefined();
     expect(headers['xi-api-key']).toBeUndefined();
     expect(headers['content-type']).toBe('application/json');
+  });
+});
+
+describe('audioProviderFetch — cross-copy body normalization', () => {
+  beforeEach(() => {
+    destroyAudioProviderDispatchersForTests();
+  });
+
+  afterEach(async () => {
+    destroyAudioProviderDispatchersForTests();
+    await Promise.all(
+      servers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          }),
+      ),
+    );
+  });
+
+  it('serializes a platform-global FormData as real multipart, not "[object FormData]"', async () => {
+    const origin = await startLoopback();
+
+    // Exactly the shapes lib/audio adapters build: platform-global FormData
+    // and Blob, with the audio payload as a named file plus scalar fields.
+    const wav = Buffer.concat([Buffer.from('RIFF0000WAVE', 'ascii'), Buffer.alloc(64, 0x07)]);
+    const formData = new FormData();
+    formData.set('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav');
+    formData.set('model', 'qwen3-asr');
+    formData.set('response_format', 'json');
+
+    const response = await audioProviderFetch(
+      `http://127.0.0.1:${origin.port}/v1/audio/transcriptions`,
+      { method: 'POST', headers: { Authorization: 'Bearer sk-test' }, body: formData },
+      { allowLocalNetworks: true },
+    );
+
+    expect(response.status).toBe(200);
+    expect(origin.lastHeaders()!['content-type']).toMatch(/^multipart\/form-data; boundary=/);
+    const body = origin.lastBody()!;
+    const text = body.toString('latin1');
+    expect(text).toContain('name="file"; filename="audio.wav"');
+    expect(text).toContain('name="model"');
+    expect(text).toContain('qwen3-asr');
+    expect(text).not.toContain('[object FormData]');
+    // The audio bytes themselves ride along (the 64-byte 0x07 payload).
+    expect(body.includes(Buffer.alloc(64, 0x07))).toBe(true);
+  });
+
+  it('serializes a bare platform-global Blob body as binary with its type', async () => {
+    const origin = await startLoopback();
+    const payload = Buffer.from('RIFFxxxxWAVEfake-audio-bytes');
+
+    const response = await audioProviderFetch(
+      `http://127.0.0.1:${origin.port}/v1/audio/transcriptions`,
+      { method: 'POST', body: new Blob([payload], { type: 'audio/wav' }) },
+      { allowLocalNetworks: true },
+    );
+
+    expect(response.status).toBe(200);
+    expect(origin.lastHeaders()!['content-type']).toBe('audio/wav');
+    expect(origin.lastBody()!.equals(payload)).toBe(true);
+  });
+
+  it('preserves repeated field names when rebuilding a foreign FormData', async () => {
+    const origin = await startLoopback();
+
+    // `append` semantics: two declarations under one name must both ride the
+    // wire — a rebuild that used `set` would collapse them to the last value.
+    const formData = new FormData();
+    formData.append('channel', 'stable');
+    formData.append('channel', 'beta');
+
+    const response = await audioProviderFetch(
+      `http://127.0.0.1:${origin.port}/v1/audio/transcriptions`,
+      { method: 'POST', body: formData },
+      { allowLocalNetworks: true },
+    );
+
+    expect(response.status).toBe(200);
+    const text = origin.lastBody()!.toString('latin1');
+    expect(text.match(/name="channel"/g)).toHaveLength(2);
+    expect(text).toContain('stable');
+    expect(text).toContain('beta');
+  });
+
+  it('serializes an empty FormData as empty multipart, not "[object FormData]"', async () => {
+    const origin = await startLoopback();
+
+    const response = await audioProviderFetch(
+      `http://127.0.0.1:${origin.port}/v1/audio/transcriptions`,
+      { method: 'POST', body: new FormData() },
+      { allowLocalNetworks: true },
+    );
+
+    expect(response.status).toBe(200);
+    expect(origin.lastHeaders()!['content-type']).toMatch(/^multipart\/form-data; boundary=/);
+    const text = origin.lastBody()!.toString('latin1');
+    expect(text).not.toContain('[object FormData]');
+    // No fields were declared, so nothing but the boundary delimiters is sent.
+    expect(text).not.toContain('name="');
+  });
+
+  it('replays a multipart body across a redirect hop as real multipart', async () => {
+    const sink = await startLoopback();
+    const origin = await startLoopback((_req, res) => {
+      res.writeHead(307, { Location: `http://127.0.0.1:${sink.port}/v1/audio/transcriptions` });
+      res.end();
+    });
+
+    const wav = Buffer.concat([Buffer.from('RIFF0000WAVE', 'ascii'), Buffer.alloc(32, 0x07)]);
+    const formData = new FormData();
+    formData.set('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav');
+    formData.set('model', 'qwen3-asr');
+
+    // A 307 must preserve the method and body: the per-hop loop re-issues the
+    // normalized init, so the rebuilt FormData has to survive re-serialization
+    // on the second request just like the first.
+    const response = await audioProviderFetch(
+      `http://127.0.0.1:${origin.port}/upload`,
+      { method: 'POST', headers: { Authorization: 'Bearer sk-test' }, body: formData },
+      { allowLocalNetworks: true },
+    );
+
+    expect(response.status).toBe(200);
+    expect(origin.requests()).toBe(1);
+    expect(sink.requests()).toBe(1);
+    expect(sink.lastHeaders()!['content-type']).toMatch(/^multipart\/form-data; boundary=/);
+    const body = sink.lastBody()!;
+    const text = body.toString('latin1');
+    expect(text).toContain('name="file"; filename="audio.wav"');
+    expect(text).toContain('qwen3-asr');
+    expect(text).not.toContain('[object FormData]');
+    expect(body.includes(Buffer.alloc(32, 0x07))).toBe(true);
   });
 });

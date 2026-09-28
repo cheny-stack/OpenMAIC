@@ -6,6 +6,7 @@ import {
   generateSceneOutlinesFromRequirements,
   generateSceneActions,
   generateSceneContent,
+  isAbortError,
   PBLGenerationError,
   withGenerationRetry,
   type AICallFn,
@@ -34,9 +35,12 @@ import {
   reserveClassroom,
 } from '@/lib/server/classroom-storage';
 import {
+  classroomTtsSummary,
+  countNarratableSpeechActions,
   generateMediaForClassroom,
   replaceMediaPlaceholders,
   generateTTSForClassroom,
+  type ClassroomTtsCoverage,
 } from '@/lib/server/classroom-media-generation';
 import { buildVideoManifestFromOutlines } from '@/lib/media/video-manifest';
 import type { UserRequirements } from '@/lib/types/generation';
@@ -90,6 +94,16 @@ export interface GenerateClassroomResult {
   scenes: Scene[];
   scenesCount: number;
   createdAt: string;
+  /**
+   * Present when TTS was requested. Omitted when TTS is disabled.
+   * `written` is 0 when synthesis saved no clips.
+   */
+  ttsCoverage?: ClassroomTtsCoverage;
+  /**
+   * Set when requested narration is incomplete (`written` < `total`) or the TTS phase failed.
+   * A requested run with no narratable speech (`total` 0) has coverage and no warning.
+   */
+  warning?: string;
 }
 
 function createInMemoryStore(stage: Stage): StageStore {
@@ -216,10 +230,29 @@ async function reserveGeneratedClassroom(
   }
 }
 
+const TTS_PHASE_FAILED_WARNING = 'TTS generation phase failed';
+
+function classroomTtsHeartbeatProgress(written: number, total: number): number {
+  if (total <= 0) return 94;
+  const ratio = Math.min(1, Math.max(0, written / total));
+  return 94 + Math.floor(ratio * 3);
+}
+
+function ttsResultWarning(
+  coverage: ClassroomTtsCoverage | undefined,
+  fallback?: string,
+): string | undefined {
+  if (coverage && coverage.written < coverage.total) {
+    return classroomTtsSummary(coverage.written, coverage.total);
+  }
+  return fallback;
+}
+
 export async function generateClassroom(
   input: GenerateClassroomInput,
   options: {
     baseUrl: string;
+    signal?: AbortSignal;
     onProgress?: (progress: ClassroomGenerationProgress) => Promise<void> | void;
   },
 ): Promise<GenerateClassroomResult> {
@@ -239,6 +272,7 @@ export async function generateClassroom(
     providerId,
     apiKey,
     thinkingConfig: classroomThinking,
+    serverManaged,
   } = await resolveModel({ stage: 'generate-classroom' });
   log.info(`Using server-configured model: ${modelString}`);
 
@@ -257,6 +291,7 @@ export async function generateClassroom(
   // classroom generation, and skips the extra resolution when web search is off.
   let searchQueryModel = languageModel;
   let searchQueryThinking = classroomThinking;
+  let searchQueryServerManaged = serverManaged;
 
   const aiCall: AICallFn = async (systemPrompt, userPrompt, _images) => {
     const result = await callLLM(
@@ -271,6 +306,7 @@ export async function generateClassroom(
       'generate-classroom',
       undefined,
       classroomThinking,
+      { serverManaged },
     );
     return result.text;
   };
@@ -294,6 +330,7 @@ export async function generateClassroom(
       model: LanguageModel;
       outputWindow?: number;
       thinking: ThinkingConfig | undefined;
+      serverManaged: boolean;
     }
   >();
 
@@ -303,6 +340,7 @@ export async function generateClassroom(
     model: LanguageModel;
     outputWindow?: number;
     thinking: ThinkingConfig | undefined;
+    serverManaged: boolean;
   }> => {
     const cached = stageModelCache.get(stage);
     if (cached) return cached;
@@ -313,6 +351,7 @@ export async function generateClassroom(
         model: languageModel,
         outputWindow: modelInfo?.outputWindow,
         thinking: classroomThinking,
+        serverManaged,
       };
       stageModelCache.set(stage, fallback);
       return fallback;
@@ -324,6 +363,7 @@ export async function generateClassroom(
         model: resolved.model,
         outputWindow: resolved.modelInfo?.outputWindow,
         thinking: resolved.thinkingConfig,
+        serverManaged: resolved.serverManaged,
       };
       log.info(`Stage "${stage}" routed to model: ${resolved.modelString}`);
       stageModelCache.set(stage, entry);
@@ -338,6 +378,7 @@ export async function generateClassroom(
         model: languageModel,
         outputWindow: modelInfo?.outputWindow,
         thinking: classroomThinking,
+        serverManaged,
       };
       stageModelCache.set(stage, fallback);
       return fallback;
@@ -353,7 +394,7 @@ export async function generateClassroom(
   // aiCall closure, and consumes the route's thinking config separately.
   const resolveSceneContentCall = async (outlineType?: string) => {
     const stage = (outlineType ? `scene-content:${outlineType}` : 'scene-content') as LlmStage;
-    const { model, outputWindow, thinking } = await resolveStageModel(stage);
+    const { model, outputWindow, thinking, serverManaged } = await resolveStageModel(stage);
     const aiCall: AICallFn = async (systemPrompt, userPrompt, _images) => {
       const result = await callLLM(
         {
@@ -368,6 +409,7 @@ export async function generateClassroom(
         'generate-classroom-scene',
         undefined,
         thinking,
+        { serverManaged },
       );
       return result.text;
     };
@@ -379,7 +421,8 @@ export async function generateClassroom(
   let agentProfilesAiCall: AICallFn | undefined;
   const getAgentProfilesAiCall = async (): Promise<AICallFn> => {
     if (agentProfilesAiCall) return agentProfilesAiCall;
-    const { model, outputWindow, thinking } = await resolveStageModel('agent-profiles');
+    const { model, outputWindow, thinking, serverManaged } =
+      await resolveStageModel('agent-profiles');
     agentProfilesAiCall = async (systemPrompt, userPrompt, _images) => {
       const result = await callLLM(
         {
@@ -393,6 +436,7 @@ export async function generateClassroom(
         'generate-classroom',
         undefined,
         thinking,
+        { serverManaged },
       );
       return result.text;
     };
@@ -403,7 +447,8 @@ export async function generateClassroom(
   let sceneActionsAiCall: AICallFn | undefined;
   const getSceneActionsAiCall = async (): Promise<AICallFn> => {
     if (sceneActionsAiCall) return sceneActionsAiCall;
-    const { model, outputWindow, thinking } = await resolveStageModel('scene-actions');
+    const { model, outputWindow, thinking, serverManaged } =
+      await resolveStageModel('scene-actions');
     sceneActionsAiCall = async (systemPrompt, userPrompt, _images) => {
       const result = await callLLM(
         {
@@ -418,6 +463,7 @@ export async function generateClassroom(
         'generate-classroom-scene',
         undefined,
         thinking,
+        { serverManaged },
       );
       return result.text;
     };
@@ -437,6 +483,7 @@ export async function generateClassroom(
       'web-search-query-rewrite',
       undefined,
       searchQueryThinking,
+      { serverManaged: searchQueryServerManaged },
     );
     return result.text;
   };
@@ -470,6 +517,7 @@ export async function generateClassroom(
           const rewriteResolved = await resolveModel({ stage: 'web-search-query-rewrite' });
           searchQueryModel = rewriteResolved.model;
           searchQueryThinking = rewriteResolved.thinkingConfig;
+          searchQueryServerManaged = rewriteResolved.serverManaged;
         } catch (err) {
           log.warn(
             `web-search-query-rewrite route "${rewriteRoute}" unavailable; using classroom model for query rewrite`,
@@ -731,6 +779,8 @@ export async function generateClassroom(
     }
 
     // Phase: TTS generation
+    let ttsCoverage: ClassroomTtsCoverage | undefined;
+    let ttsFailureWarning: string | undefined;
     if (input.enableTTS) {
       await options.onProgress?.({
         step: 'generating_tts',
@@ -741,12 +791,29 @@ export async function generateClassroom(
       });
 
       try {
-        await generateTTSForClassroom(scenes, stageId, options.baseUrl);
-        log.info('TTS generation complete');
+        ttsCoverage = await generateTTSForClassroom(
+          scenes,
+          stageId,
+          options.baseUrl,
+          options.signal,
+          async ({ written, total }) => {
+            await options.onProgress?.({
+              step: 'generating_tts',
+              progress: classroomTtsHeartbeatProgress(written, total),
+              message: `Generating TTS audio (${written}/${total})`,
+              scenesGenerated: scenes.length,
+              totalScenes: outlines.length,
+            });
+          },
+        );
       } catch (err) {
+        if (isAbortError(err)) throw err;
         log.warn('TTS generation phase failed, continuing:', err);
+        ttsCoverage = { written: 0, total: countNarratableSpeechActions(scenes) };
+        ttsFailureWarning = TTS_PHASE_FAILED_WARNING;
       }
     }
+    const ttsWarning = ttsResultWarning(ttsCoverage, ttsFailureWarning);
 
     await options.onProgress?.({
       step: 'persisting',
@@ -765,7 +832,7 @@ export async function generateClassroom(
     await options.onProgress?.({
       step: 'completed',
       progress: 100,
-      message: 'Classroom generation completed',
+      message: ttsWarning ?? 'Classroom generation completed',
       scenesGenerated: persisted.scenes.length,
       totalScenes: outlines.length,
     });
@@ -777,6 +844,8 @@ export async function generateClassroom(
       scenes: persisted.scenes,
       scenesCount: persisted.scenes.length,
       createdAt: persisted.createdAt,
+      ...(ttsCoverage ? { ttsCoverage } : {}),
+      ...(ttsWarning ? { warning: ttsWarning } : {}),
     };
   } finally {
     if (!persisted) {

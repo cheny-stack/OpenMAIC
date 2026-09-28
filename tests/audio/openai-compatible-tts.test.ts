@@ -3,7 +3,8 @@ import { generateTTS } from '@/lib/audio/tts-providers';
 
 const { mockFetch } = vi.hoisted(() => ({ mockFetch: vi.fn() as Mock }));
 
-vi.mock('@/lib/server/audio-provider-fetch', () => ({
+vi.mock('@/lib/server/audio-provider-fetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/server/audio-provider-fetch')>()),
   audioProviderFetch: mockFetch,
 }));
 
@@ -45,6 +46,7 @@ describe('OpenAI-compatible custom TTS', () => {
       input: '你好',
       voice: 'zh-CN-XiaoxiaoNeural',
       speed: 1,
+      response_format: 'mp3',
     });
     expect(result.format).toBe('mp3');
   });

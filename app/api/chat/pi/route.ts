@@ -1,8 +1,10 @@
+import { attachInteractiveState } from '@/lib/chat/pi/interactive-state-evidence';
 /**
  * Pi Director Chat API Endpoint
  *
- * POST /api/chat/pi - parallel PoC path for running the in-class multi-agent
- * chain as a single server-side pi agent loop.
+ * POST /api/chat/pi - default path for running the in-class multi-agent chain
+ * as a single server-side Pi agent loop. The build-time flag can disable this
+ * route together with the corresponding client path for legacy rollback.
  */
 
 import { NextRequest } from 'next/server';
@@ -22,11 +24,14 @@ import {
 import { runPiDirectorLoop } from '@/lib/chat/pi/director-loop';
 import type { SendEvent } from '@/lib/chat/pi/types';
 import { resolveModel } from '@/lib/server/resolve-model';
+import { parseUserStageRoutes } from '@/lib/server/model-routes';
 import { apiError } from '@/lib/server/api-response';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import { resolveClassroomWebSearchConfig } from '@/lib/server/web-search-config';
-import { authenticatePersistenceHeaders } from '@/lib/persistence/server-auth';
+import { resolveRequestOwner } from '@/lib/server/identity/resolve';
+import { invalidOwnerCredentialResponse } from '@/lib/server/identity/with-owner';
+import { guardedServerRuntimeStore } from '@/lib/persistence/runtime-tombstone-guard';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import { createWhiteboardRuntimeService } from '@/lib/whiteboard/runtime/store';
 import { hasNativeWhiteboardAction } from '@/lib/chat/pi/tools/native-whiteboard';
@@ -43,6 +48,17 @@ export const maxDuration = 300;
 export async function POST(req: NextRequest) {
   if (!isPiChatEnabled()) {
     return apiError('INVALID_REQUEST', 404, 'Pi chat runtime is disabled');
+  }
+
+  // Like every owner-resolving route, a request whose credential an owner
+  // auth method refuses is refused here, before any model work. With the
+  // default anonymous fallback resolution always succeeds, so this only
+  // refuses requests under a host method that can reject (an expired token,
+  // say) or with the fallback off. Memoized, so the whiteboard branch below
+  // reuses this resolution.
+  const owner = await resolveRequestOwner(req);
+  if (!owner.ok) {
+    return invalidOwnerCredentialResponse();
   }
 
   const encoder = new TextEncoder();
@@ -66,13 +82,37 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required field: config.agentIds');
     }
 
-    if (body.elementReference !== undefined && !isCoursewareReferenceEnabled()) {
+    if (
+      (body.elementReference !== undefined || body.interactiveState !== undefined) &&
+      !isCoursewareReferenceEnabled()
+    ) {
       return apiError('INVALID_REQUEST', 400, 'Courseware references are disabled');
     }
 
     let elementReference;
     try {
       elementReference = resolveElementReference(body);
+    } catch (error) {
+      if (error instanceof ElementReferenceValidationError) {
+        return apiError(
+          'INVALID_REQUEST',
+          400,
+          error.message,
+          undefined,
+          body.elementReference?.kind === 'whiteboard_element'
+            ? 'whiteboard_reference_changed'
+            : undefined,
+        );
+      }
+      throw error;
+    }
+
+    let interactiveStateNote;
+    try {
+      ({ elementReference, stateNote: interactiveStateNote } = attachInteractiveState(
+        body,
+        elementReference,
+      ));
     } catch (error) {
       if (error instanceof ElementReferenceValidationError) {
         return apiError('INVALID_REQUEST', 400, error.message);
@@ -103,6 +143,9 @@ export async function POST(req: NextRequest) {
     } = await resolveModel({
       modelString: body.model,
       stage: 'chat-adapter',
+      // Honor the classroom-interaction per-stage override the client sends in
+      // `x-model-routes`. A routed stage brings its own key and base URL; otherwise the body credentials are used (never x-* headers).
+      userRoutes: parseUserStageRoutes(req.headers.get('x-model-routes')),
       apiKey: body.apiKey,
       baseUrl: body.baseUrl,
       providerType: body.providerType,
@@ -172,22 +215,22 @@ export async function POST(req: NextRequest) {
       nativeWhiteboardRequested &&
       validRequestStartStageId &&
       process.env.NEXT_PUBLIC_PERSISTENCE === '1' &&
-      process.env.DATABASE_URL &&
-      process.env.PERSISTENCE_DEV_TOKEN
+      process.env.DATABASE_URL
     ) {
-      const principal = authenticatePersistenceHeaders(req.headers);
-      const learnerKey = principal?.learnerKey;
-      if (learnerKey && learnerKey === learnerKey.trim()) {
-        try {
-          const provider = await getServerPersistenceProvider(process.env.DATABASE_URL);
-          nativeWhiteboardLearnerKey = learnerKey;
-          nativeWhiteboardService = createWhiteboardRuntimeService({
-            store: provider.runtimeStore,
-            resolveLearnerKey: () => learnerKey,
-          });
-        } catch {
-          log.warn('Native whiteboard capability unavailable: persistence initialization failed');
-        }
+      // The runtime learner key is the request owner, exactly as on
+      // /api/persistence/runtime/*; nothing the client sends chooses it.
+      const learnerKey = owner.principal.ownerId;
+      try {
+        const provider = await getServerPersistenceProvider(process.env.DATABASE_URL);
+        nativeWhiteboardLearnerKey = learnerKey;
+        nativeWhiteboardService = createWhiteboardRuntimeService({
+          // Guarded like /api/persistence/runtime/*: a deleted course takes
+          // no new runtime from the whiteboard either.
+          store: guardedServerRuntimeStore(provider.runtimeStore, provider.pool),
+          resolveLearnerKey: () => learnerKey,
+        });
+      } catch {
+        log.warn('Native whiteboard capability unavailable: persistence initialization failed');
       }
     }
     let nativeWebSearchConfig: ReturnType<typeof resolveClassroomWebSearchConfig>;
@@ -231,6 +274,7 @@ export async function POST(req: NextRequest) {
         await runPiDirectorLoop({
           body,
           elementReference,
+          interactiveStateNote,
           agentConfigs,
           send,
           languageModel,

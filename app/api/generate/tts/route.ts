@@ -11,6 +11,7 @@ import { NextRequest } from 'next/server';
 import {
   generateTTS,
   QwenTTSError,
+  resolveTTSRequestVoice,
   TTSInvalidResponseError,
   TTSRateLimitError,
 } from '@/lib/audio/tts-providers';
@@ -25,14 +26,13 @@ import {
   resolveTTSVoice,
   TTSModelNotAllowedError,
 } from '@/lib/server/provider-config';
-import { isCustomTTSProvider, type TTSProviderId } from '@/lib/audio/types';
+import type { TTSProviderId } from '@/lib/audio/types';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { findUnsafeNetworkTargetError, validatePublicUrlForSSRF } from '@/lib/server/ssrf-guard';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@/lib/audio/voxcpm';
 import { QwenVoiceCloneError, qwenVoiceCloneErrorMessage } from '@/lib/audio/qwen-voice-clone';
 import { isQwenCloneVoice } from '@/lib/audio/constants';
-import { resolveOpenAIEdgeTTSDefaultVoice } from '@/lib/audio/openai-edge-tts';
 
 const log = createLogger('TTS API');
 
@@ -116,20 +116,23 @@ export async function POST(req: NextRequest) {
     const baseUrl = resolveTTSBaseUrl(ttsProviderId, clientBaseUrl);
     ttsVoice = resolveTTSVoice(ttsProviderId) || ttsVoice;
 
-    // OpenAI-compatible custom providers require a concrete provider voice.
-    // Existing openai-edge-tts providers may still carry the old client-side
-    // `default` placeholder, so resolve that service's neural voice by language
-    // before rejecting the request.
-    if (isCustomTTSProvider(ttsProviderId) && ttsVoice.toLowerCase() === 'default') {
-      ttsVoice = resolveOpenAIEdgeTTSDefaultVoice(baseUrl, ttsVoice, text);
-      if (ttsVoice.toLowerCase() === 'default') {
-        return apiError(
-          'INVALID_VOICE',
-          400,
-          'Custom TTS providers require a concrete voice ID. Add and select a provider voice (for example, zh-CN-XiaoxiaoNeural) in Audio settings.',
-        );
-      }
+    // Custom OpenAI-compatible providers require a concrete voice. The adapter
+    // may translate a legacy placeholder for its own protocol; otherwise the
+    // neutral route rejects it with an actionable client error.
+    const requestVoice = resolveTTSRequestVoice(
+      ttsProviderId as TTSProviderId,
+      baseUrl,
+      ttsVoice,
+      text,
+    );
+    if (requestVoice === undefined) {
+      return apiError(
+        'INVALID_VOICE',
+        400,
+        'Custom TTS providers require a concrete voice ID, such as zh-CN-XiaoxiaoNeural in Audio settings.',
+      );
     }
+    ttsVoice = requestVoice;
 
     // Pre-flight the same key requirement the library enforces: a keyed provider
     // with no key (server config AND client-supplied key both absent) is a
@@ -157,6 +160,8 @@ export async function POST(req: NextRequest) {
       apiKey,
       baseUrl,
       publicOnly,
+      // A server-configured provider's endpoint may be on a local network.
+      managed,
       providerOptions: {
         ...(ttsProviderOptions || {}),
         ...(qwenCloneVoice ? { qwenVoiceClone: true } : {}),

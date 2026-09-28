@@ -14,9 +14,16 @@ import {
   resolveBaseUrl,
   resolveProxy,
 } from '@/lib/server/provider-config';
-import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
+import { validateClientBaseUrl, validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 import { fetchWithRedirectValidation } from '@/lib/server/fetch-with-redirect-validation';
-import { getStageRoute, type LlmStage } from '@/lib/server/model-routes';
+import { clientBaseUrlLlmFetch } from '@/lib/server/llm-provider-fetch';
+import {
+  getStageRoute,
+  getUserStageRoute,
+  parseUserStageRoutes,
+  type LlmStage,
+  type UserStageRoute,
+} from '@/lib/server/model-routes';
 
 export interface ResolvedModel extends ModelWithInfo {
   /** Original model string (e.g. "openai/gpt-4o-mini") */
@@ -31,6 +38,18 @@ export interface ResolvedModel extends ModelWithInfo {
   baseUrl?: string;
   /** Optional per-request thinking configuration from the client. */
   thinkingConfig?: ThinkingConfig;
+  /**
+   * Whether the primary model was chosen by the SERVER rather than the client:
+   * an operator MODEL_ROUTES/DEFAULT_MODEL resolution (env route) or a
+   * server-configured provider (managed key). User-level routes (the
+   * 「课程模型配置」 per-stage selection) are USER choices — even though they
+   * route the stage, they are not server-managed. Only server-managed
+   * primaries may arm the retryable-failure fallback in callLLM: a
+   * client-supplied model with a garbage key must never be allowed to burn the
+   * operator's fallback key. Callers pass this through to callLLM's
+   * `fallbackOptions.serverManaged`.
+   */
+  serverManaged: boolean;
 }
 
 /**
@@ -48,19 +67,31 @@ export async function resolveModel(params: {
    * lib/server/model-routes.ts.
    */
   stage?: LlmStage;
+  /**
+   * User-level per-stage routes (parsed from the `x-model-routes` header by
+   * resolveModelFromHeaders/FromRequest). Precedence: operator MODEL_ROUTES >
+   * these user routes > x-model > DEFAULT_MODEL. A user route carries its own
+   * connection params (apiKey/baseUrl/providerType) for the routed provider;
+   * server-managed providers still resolve credentials authoritatively.
+   */
+  userRoutes?: Record<string, UserStageRoute>;
   apiKey?: string;
   baseUrl?: string;
   providerType?: string;
   thinkingConfig?: ThinkingConfig;
 }): Promise<ResolvedModel> {
-  // Resolution order: stage route > x-model > DEFAULT_MODEL.
+  // Resolution order: env stage route > user stage route > x-model > DEFAULT_MODEL.
   // A configured stage route is the operator's deliberate per-stage choice and
   // wins even over a client-sent x-model (otherwise the browser UI, which always
-  // sends its saved model, would shadow every route). Unrouted stages fall back
+  // sends its saved model, would shadow every route). User routes (the
+  // user-facing 「课程模型配置」 per-stage selection) sit just below operator
+  // routes and above the client's main-model x-model. Unrouted stages fall back
   // to the client x-model, then DEFAULT_MODEL. There is intentionally no hardcoded
   // model fallback — if nothing resolves we fail loud rather than silently pick a
   // vendor default.
-  const stageRoute = getStageRoute(params.stage);
+  const envRoute = getStageRoute(params.stage);
+  const userRoute = envRoute ? undefined : getUserStageRoute(params.userRoutes ?? {}, params.stage);
+  const stageRoute: UserStageRoute | undefined = envRoute ?? userRoute;
   const stageModel = stageRoute?.model;
   const modelString = stageModel || params.modelString || process.env.DEFAULT_MODEL;
   if (!modelString) {
@@ -74,11 +105,13 @@ export async function resolveModel(params: {
   // params (apiKey/baseUrl/providerType) belong to the client's *other* model
   // and must not bleed onto the routed provider — otherwise e.g. a routed
   // Anthropic model would be built with the client's OpenAI providerType/key.
-  // A routed model resolves purely from server config, as if no x-model was sent.
+  // A routed model resolves purely from server config, as if no x-model was sent
+  // — except a *user* route, which supplies its own connection for the routed
+  // provider (server-managed providers ignore it regardless).
   const routed = Boolean(stageModel);
-  const clientApiKey = routed ? undefined : params.apiKey;
-  const clientProviderType = routed ? undefined : params.providerType;
-  const clientBaseUrlParam = routed ? undefined : params.baseUrl;
+  const clientApiKey = routed ? userRoute?.apiKey : params.apiKey;
+  const clientProviderType = routed ? userRoute?.providerType : params.providerType;
+  const clientBaseUrlParam = routed ? userRoute?.baseUrl : params.baseUrl;
 
   // Server-managed providers are admin-owned: the operator's key and base URL
   // are authoritative and any client-sent override is ignored. Origin URL
@@ -106,8 +139,18 @@ export async function resolveModel(params: {
     throw new Error('Amazon Bedrock must be enabled by the server operator before it can be used.');
   }
   const clientBaseUrl = managed ? undefined : clientBaseUrlParam || undefined;
-  if (clientBaseUrl) {
-    const ssrfError = await validateUrlForSSRF(clientBaseUrl);
+  // An unmanaged provider's endpoint is the caller's choice whenever the caller
+  // picked the model (x-model or a user route) or sent a base URL: either the
+  // client-supplied URL or the provider's catalog default (e.g. a localhost
+  // Ollama). Only a model the operator selected (MODEL_ROUTES or
+  // DEFAULT_MODEL) with no client base URL resolves purely from server config.
+  const operatorSelected = Boolean(envRoute) || (!userRoute && !params.modelString);
+  const clientEndpoint = !managed && (Boolean(clientBaseUrl) || !operatorSelected);
+  const endpointUrl = clientBaseUrl ?? getProvider(providerId)?.defaultBaseUrl;
+  if (clientEndpoint && endpointUrl) {
+    const ssrfError = clientBaseUrl
+      ? await validateClientBaseUrl(clientBaseUrl)
+      : await validateUrlForSSRF(endpointUrl);
     if (ssrfError) {
       throw new Error(ssrfError);
     }
@@ -123,9 +166,10 @@ export async function resolveModel(params: {
     baseUrl,
     proxy,
     providerType: clientProviderType as ProviderType | undefined,
-    // Re-validate every redirect hop of the outbound request (see
-    // fetchWithRedirectValidation); the base URL above is checked at origin.
-    fetchImpl: fetchWithRedirectValidation,
+    // A caller-chosen endpoint is pinned and refuses redirects (see
+    // lib/server/llm-provider-fetch.ts). Operator-configured endpoints keep the
+    // transport that re-validates every redirect hop.
+    fetchImpl: clientEndpoint ? clientBaseUrlLlmFetch : fetchWithRedirectValidation,
   });
 
   // Thinking arbitration mirrors model routing — the route carries a full
@@ -148,6 +192,12 @@ export async function resolveModel(params: {
     apiKey,
     baseUrl,
     thinkingConfig,
+    // An operator route (MODEL_ROUTES) or DEFAULT_MODEL pick is the operator's
+    // choice, and a server-configured provider key is operator-owned — either
+    // way the primary is server-managed and may arm the fallback. A user-level
+    // route or a plain client x-model on an unmanaged provider is NOT
+    // server-managed.
+    serverManaged: Boolean(envRoute) || managed,
   };
 }
 
@@ -161,7 +211,7 @@ function getThinkingConfigFromBody(body: unknown): ThinkingConfig | undefined {
 /**
  * Resolve a language model from standard request headers.
  *
- * Reads: x-model, x-api-key, x-base-url, x-provider-type
+ * Reads: x-model, x-api-key, x-base-url, x-provider-type, x-model-routes
  * Note: requiresApiKey is derived server-side from the provider registry,
  * never from client headers, to prevent auth bypass.
  */
@@ -173,6 +223,7 @@ export async function resolveModelFromHeaders(
   return resolveModel({
     modelString: req.headers.get('x-model') || undefined,
     stage,
+    userRoutes: parseUserStageRoutes(req.headers.get('x-model-routes')),
     apiKey: req.headers.get('x-api-key') || undefined,
     baseUrl: req.headers.get('x-base-url') || undefined,
     providerType: req.headers.get('x-provider-type') || undefined,

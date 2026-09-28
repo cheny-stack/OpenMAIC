@@ -3,7 +3,8 @@ import { generateTTS, TTSInvalidResponseError, TTSRateLimitError } from '@/lib/a
 
 const { mockFetch } = vi.hoisted(() => ({ mockFetch: vi.fn() as Mock }));
 
-vi.mock('@/lib/server/audio-provider-fetch', () => ({
+vi.mock('@/lib/server/audio-provider-fetch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/server/audio-provider-fetch')>()),
   audioProviderFetch: mockFetch,
 }));
 
