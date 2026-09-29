@@ -36,6 +36,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Bug Fixes
 
+- Server persistence: the course library and folders work without the agent runtime. `/api/stages/**` (list, create, read, save, delete, manifest, scenes, freshness, status, generation-complete, publish, unpublish) and `/api/folders/**` now gate on `DATABASE_URL` alone instead of also requiring `OPENMAIC_AGENT_RUNTIME_ENABLED`, so a deployment with server persistence and the runtime off no longer answers `404` there and shows an empty, unavailable library. Agent routes (`/api/agent/**`, `/api/skills/**`, `/api/materials/**`) still require the runtime, and without a `DATABASE_URL` everything answers `404` as before. `GET /api/agent/runtime` also reports `persistence`.
+- Startup: a configuration refused by the boot validation in `instrumentation.ts` (a malformed `ASSET_QUOTA_BYTES`, `ASSET_PENDING_TTL_MS`, `OWNER_WRITE_LOCK_WAIT_MS` or `OWNER_CLAIM_LOCK_WAIT_MS`; an `OWNER_CLAIM_TRIGGER` other than `explicit` / `auto`; the removed `OWNER_AUTHENTICATOR` / `TRUSTED_PROXY_*` variables; a malformed `PERSISTENCE_SHARED_OWNER_ID`, one without `ACCESS_CODE` or beside a registration that leaves out `sharedTeamAuthMethod()`, or `sharedTeamAuthMethod()` registered without it or not last; `ASSET_S3_BUCKET` beside a registered asset byte store, or `ASSET_BYTE_EGRESS=redirect` with a byte store that does not declare `signsReadUrls`) now exits the Node.js server with code `1` after one `[boot] Invalid server configuration` line carrying the original message. Any other boot failure (a module missing from the build, a host registration call that throws) also exits with code `1`, printed as `[boot] Server startup failed` with its stack. Previously the server logged "Failed to prepare server", kept listening, and answered every request with `500`. Warnings never stop the server.
 - Server persistence: two concurrent creates of one new course id by the same owner no longer refuse the second as `reserved-document`: creates of one id take turns, and the second saves as an update without running the create hooks again.
 - Server persistence: instances starting at the same time against one database no longer fail schema setup on a catalog race (`duplicate key value violates unique constraint "pg_class_relname_nsp_index"` / `pg_type_typname_nsp_index`, `tuple concurrently updated`), which made an instance's first request answer `500`. Every schema bootstrap (documents, `stage_meta` and its ownership backfill, owner materials, assets, runtime, agent sessions, session materials, user skills, and the asset collector's) now runs under one PostgreSQL advisory lock held on a dedicated connection.
 
@@ -44,6 +46,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Server persistence: operations on one owner-bound document store no longer share mutable state, so concurrent calls on a store an agent run shares with its tools each gate their own stage; `create_stage` also runs sequentially within a tool batch.
 - Server persistence: runtime data of a deleted course reads as absent and takes no new writes, however the request path is spelled.
 - `@openmaic/storage` 0.32.0: `PgDocumentStore` takes `assetReferencePrincipals` (and `AssetCollector` a matching per-owner function) so a document write can no longer commit or pin another principal's asset entry; a store can refuse `createSession` with `RuntimeStageNotFoundError` (`404 STAGE_NOT_FOUND`); and a session create over a taken id answers `409 SESSION_ALREADY_EXISTS` whoever holds it, instead of `403` for another learner's session.
+
+## [1.1.2] - 2026-09-28
+
+A security release. Server-side requests to provider URLs that a caller can choose now connect only to the addresses that passed validation and refuse redirects, and error responses no longer carry provider response bodies or connection details. Read **Behavior Changes** before upgrading.
+
+### Security
+
+- Provider connections: when a provider is not configured on the server, the settings UI can supply its own base URL, endpoint or model. Several routes validated such a URL once and then connected with a transport that resolved DNS again or followed redirects: PDF parsing and connectivity checks, the Azure voice list, model listing, image and video providers, and LLM calls. Some of these routes also echoed provider response bodies or connection errors back to the caller. This allowed requests to internal addresses and probing of internal services. These requests now go through the strict provider transport, which pins every connection to validated addresses and refuses redirects. IP-literal hosts and the built-in default URLs of unmanaged providers are held to the same policy. Caller-facing errors are fixed text. Client-supplied AliDocMind endpoints must be official hosts. [GHSA-g87c-cm4q-cw5x](https://github.com/THU-MAIC/OpenMAIC/security/advisories/GHSA-g87c-cm4q-cw5x) [#1704](https://github.com/THU-MAIC/OpenMAIC/pull/1704)
+- Classroom media generation downloads provider-returned image and video URLs through the strict provider transport: HTTPS public addresses only, `data:` URLs decoded locally, and size bounded while streaming [#1692](https://github.com/THU-MAIC/OpenMAIC/pull/1692) (by @Yi-111-a). Agent-runtime image and video tools now do the same [#1704](https://github.com/THU-MAIC/OpenMAIC/pull/1704).
+
+### Behavior Changes
+
+- A caller-supplied LLM, image/video, model-list, PDF-check or self-hosted MinerU base URL that answers with a redirect is refused instead of followed. Configure the final URL.
+- A caller-supplied provider base URL containing a query string or fragment is refused.
+- A caller-chosen loopback or private address, including an IP literal or an unmanaged provider's built-in `localhost` default (Ollama, Lemonade, VoxCPM), needs `ALLOW_LOCAL_NETWORKS`. Configure the provider on the server to keep it operator-managed.
+- Server-configured providers (LLM, image/video, TTS/ASR, MinerU, MinerU Cloud) may use local network addresses without `ALLOW_LOCAL_NETWORKS`. Cloud metadata and reserved ranges stay blocked, and redirects from them follow `ALLOW_LOCAL_NETWORKS`.
+- A client-supplied AliDocMind endpoint must be an official `docmind-api.<region>.aliyuncs.com` host over HTTPS; other endpoints answer `403 INVALID_URL`. Server-configured endpoints are unchanged.
+- Provider check and generation errors are fixed messages without the provider's response text or connection errors:
+  - `/api/verify-pdf-provider` success no longer includes `status`;
+  - `/api/azure-voices` answers provider failures with `502`;
+  - `/api/provider/probe-models` reports other HTTP failures as `502` with the status class only;
+  - LLM errors for a client-selected endpoint read `Cannot connect to API: connection failed` (or `request timed out`, `redirects are not allowed`) or the HTTP reason phrase;
+  - MinerU Cloud errors report the HTTP status or numeric code.
+- Agent-runtime video and poster downloads require HTTPS.
+- Pinned provider requests connect directly and do not use Node's environment proxy (`NODE_USE_ENV_PROXY` with `HTTP_PROXY`/`HTTPS_PROXY`).
+- A provider id that names an inherited object property (such as `constructor`) is no longer treated as server-configured.
 
 ## [1.1.1] - 2026-09-27
 
