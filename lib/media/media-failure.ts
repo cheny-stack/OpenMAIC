@@ -19,16 +19,23 @@
  * like an ordinary failure — and it still offers the Retry, because after the
  * ceiling is raised that Retry is the only way back, and it costs nothing: the
  * bytes were kept, so it re-attempts the upload rather than the generation. It
- * is never retried automatically, by a pass or by a reload, so nothing about
+ * is never retried automatically, by a reload or otherwise, so nothing about
  * this re-bills anyone.
  *
  * Every code here is written to the local media table, so it survives a reload
- * as a `failed` task and the next generation pass skips the element instead of
- * paying for it again.
+ * as a `failed` task instead of being paid for again.
  */
 
 /** The store is full. Raised by the asset layer, not by a generation route. */
 export const ASSET_QUOTA_EXCEEDED = 'ASSET_QUOTA_EXCEEDED';
+
+/**
+ * The store refused these bytes for good (too large, an unsupported type) and
+ * nothing can produce them again: media the user inserted or imported, which
+ * has no generation request to retry. Written by the one-way import of
+ * pre-server browser data; the element shows as failed, without a Retry.
+ */
+export const ASSET_REFUSED = 'ASSET_REFUSED';
 
 /**
  * Codes no retry can change.
@@ -42,9 +49,10 @@ export const ASSET_QUOTA_EXCEEDED = 'ASSET_QUOTA_EXCEEDED';
  * is treated as transient, because the cost of one extra attempt is much
  * smaller than the cost of a slide that can never be recovered.
  */
-const PERMANENT_MEDIA_FAILURE_CODES: ReadonlySet<string> = new Set([
+export const PERMANENT_MEDIA_FAILURE_CODES: ReadonlySet<string> = new Set([
   'CONTENT_SENSITIVE',
   'GENERATION_DISABLED',
+  ASSET_REFUSED,
 ]);
 
 /** Whether a failed task may be tried again, by a person asking for it. */
@@ -59,15 +67,10 @@ export function isRetryableMediaFailure(task: { readonly errorCode?: string }): 
  * whether the bytes in hand fit in the headroom that is left -- so a refusal is
  * evidence about one blob, and only weak evidence about the next one.
  *
- * The generation pass stops the deck at the first one anyway, and that is a
- * judgement about cost rather than about certainty: every element it attempts
- * costs a provider call, so continuing to pay for elements that will probably
- * be refused is the worse bet, and the elements it never reached keep their
- * placeholders and their Retry. A path whose refusals are free makes the
- * opposite call -- narration adoption attempts every clip smaller than the
- * smallest one already refused in the same run, because one clip that does not
- * fit says nothing about a shorter one behind it, while saying everything about
- * one at least as long.
+ * A path whose refusals are free acts on that -- narration adoption attempts
+ * every clip smaller than the smallest one already refused in the same run,
+ * because one clip that does not fit says nothing about a shorter one behind
+ * it, while saying everything about one at least as long.
  */
 export function isStorageFullFailure(errorCode: string | undefined): boolean {
   return errorCode === ASSET_QUOTA_EXCEEDED;

@@ -1,200 +1,103 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/base';
-import { defaultTheme } from '../fixtures/test-data/scene-content';
+import { defaultTheme } from '../fixtures/test-data/slide-theme';
+import { TINY_MP4_BASE64 } from '../fixtures/test-data/tiny-video';
+import { seedServerAsset, seedServerDocument, uniqueStageId } from '../fixtures/server-seed';
 
-const TEST_STAGE_ID = 'e2e-video-thumbnail-stage';
-const VIDEO_MEDIA_REF = 'gen_vid_thumbnail';
-const LEGACY_STAGE_ID = 'e2e-legacy-video-ref-stage';
-const LEGACY_VIDEO_REF = 'gen_vid_1';
-const UNIQUE_VIDEO_REF = 'gen_vid_unique_legacy';
-const FAILED_EXACT_STAGE_ID = 'e2e-failed-exact-video-ref-stage';
-const OTHER_VIDEO_REF = 'gen_vid_other_success';
 const POSTER_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const VIDEO_BYTES = new Uint8Array([
+  0, 0, 0, 24, 102, 116, 121, 112, 109, 112, 52, 50, 0, 0, 0, 0, 109, 112, 52, 50, 105, 115, 111,
+  109,
+]);
 
-async function seedVideoThumbnailStage({
-  page,
-  stageId = TEST_STAGE_ID,
-  courseName = 'Video Thumbnail Course',
-  slideMediaRef = VIDEO_MEDIA_REF,
-  storedMediaRef = slideMediaRef,
-  storedError,
-  extraStoredMediaRefs = [],
-}: {
-  page: Page;
-  stageId?: string;
-  courseName?: string;
-  slideMediaRef?: string;
-  storedMediaRef?: string;
-  storedError?: string;
-  extraStoredMediaRefs?: string[];
-}) {
+/**
+ * A course whose first slide is a generated video: the bytes and the poster
+ * are in the owner's asset pool, and the slide holds the allocated ids, exactly
+ * as generation leaves it.
+ */
+async function seedVideoThumbnailStage(
+  page: Page,
+  courseName: string,
+  video: { bytes: Uint8Array; withPoster: boolean } = { bytes: VIDEO_BYTES, withPoster: true },
+): Promise<string> {
   await page.goto('/', { waitUntil: 'networkidle' });
-
-  await page.evaluate(
-    ({
-      stageId,
-      courseName,
-      slideMediaRef,
-      storedMediaRef,
-      storedError,
-      extraStoredMediaRefs,
-      posterBase64,
-      theme,
-    }) => {
-      return new Promise<void>((resolve, reject) => {
-        const request = indexedDB.open('MAIC-Database');
-
-        request.onsuccess = (event) => {
-          const db = (event.target as IDBOpenDBRequest).result;
-          const tx = db.transaction(['mediaFiles'], 'readwrite');
-          const now = Date.now();
-          const videoBytes = new Uint8Array([
-            0, 0, 0, 24, 102, 116, 121, 112, 109, 112, 52, 50, 0, 0, 0, 0, 109, 112, 52, 50, 105,
-            115, 111, 109,
-          ]);
-          const posterBytes = Uint8Array.from(atob(posterBase64), (char) => char.charCodeAt(0));
-          const videoBlob = new Blob([videoBytes], { type: 'video/mp4' });
-          const posterBlob = new Blob([posterBytes], { type: 'image/png' });
-          const failedVideoBlob = new Blob([], { type: 'video/mp4' });
-
-          const putVideoRecord = (mediaRef: string, error?: string) => {
-            const blob = error ? failedVideoBlob : videoBlob;
-            tx.objectStore('mediaFiles').put({
-              id: `${stageId}:${mediaRef}`,
-              stageId,
-              type: 'video',
-              blob,
-              mimeType: 'video/mp4',
-              size: blob.size,
-              poster: error ? undefined : posterBlob,
-              prompt: 'A generated classroom video preview',
-              params: '{}',
-              error,
-              createdAt: now,
-            });
-          };
-
-          const documentScene = {
-            id: 'scene-video-thumbnail',
-            stageId,
-            type: 'slide',
-            title: 'Video preview',
-            order: 0,
-            content: {
-              type: 'slide',
-              canvas: {
-                id: 'slide-video-thumbnail',
-                viewportSize: 1000,
-                viewportRatio: 0.5625,
-                theme,
-                background: { type: 'solid', color: '#111827' },
-                elements: [
-                  {
-                    id: 'video-el',
-                    type: 'video',
-                    src: slideMediaRef,
-                    mediaRef: slideMediaRef,
-                    left: 0,
-                    top: 0,
-                    width: 1000,
-                    height: 562.5,
-                    rotate: 0,
-                    autoplay: false,
-                  },
-                ],
+  const stageId = uniqueStageId('e2e-video-thumbnail-stage');
+  const videoId = await seedServerAsset(page, video.bytes, 'video/mp4');
+  const posterId = video.withPoster
+    ? await seedServerAsset(page, Buffer.from(POSTER_BASE64, 'base64'), 'image/png')
+    : undefined;
+  const now = Date.now();
+  await seedServerDocument(page, {
+    stage: {
+      id: stageId,
+      name: courseName,
+      description: '',
+      style: 'professional',
+      createdAt: now,
+      updatedAt: now,
+    },
+    scenes: [
+      {
+        id: 'scene-video-thumbnail',
+        stageId,
+        type: 'slide',
+        title: 'Video preview',
+        order: 0,
+        content: {
+          type: 'slide',
+          canvas: {
+            id: 'slide-video-thumbnail',
+            viewportSize: 1000,
+            viewportRatio: 0.5625,
+            theme: defaultTheme,
+            background: { type: 'solid', color: '#111827' },
+            elements: [
+              {
+                id: 'video-el',
+                type: 'video',
+                src: videoId,
+                mediaRef: videoId,
+                ...(posterId ? { poster: posterId } : {}),
+                left: 0,
+                top: 0,
+                width: 1000,
+                height: 562.5,
+                rotate: 0,
+                autoplay: false,
               },
-            },
-            createdAt: now,
-            updatedAt: now,
-          };
-
-          putVideoRecord(storedMediaRef, storedError);
-          for (const mediaRef of extraStoredMediaRefs) {
-            putVideoRecord(mediaRef);
-          }
-
-          tx.oncomplete = () => {
-            db.close();
-            const documentRequest = indexedDB.open('maic-documents', 1);
-            documentRequest.onupgradeneeded = () => {
-              const documentDb = documentRequest.result;
-              documentDb.createObjectStore('stages', { keyPath: 'id' });
-              const scenes = documentDb.createObjectStore('scenes', {
-                keyPath: ['stageId', 'id'],
-              });
-              scenes.createIndex('by-stage', 'stageId');
-              documentDb.createObjectStore('outlines', { keyPath: 'stageId' });
-            };
-            documentRequest.onsuccess = () => {
-              const documentDb = documentRequest.result;
-              const documentTx = documentDb.transaction(
-                ['stages', 'scenes', 'outlines'],
-                'readwrite',
-              );
-              documentTx.objectStore('stages').put({
-                id: stageId,
-                name: courseName,
-                description: '',
-                language: 'en-US',
-                style: 'professional',
-                createdAt: now,
-                updatedAt: now,
-                dslVersion: '0.1.0',
-              });
-              documentTx.objectStore('scenes').put(documentScene);
-              documentTx.objectStore('outlines').put({
-                stageId,
-                outline: { outlines: [], createdAt: now, updatedAt: now },
-              });
-              documentTx.oncomplete = () => {
-                documentDb.close();
-                resolve();
-              };
-              documentTx.onerror = () => reject(documentTx.error);
-            };
-            documentRequest.onerror = () => reject(documentRequest.error);
-          };
-          tx.onerror = () => reject(tx.error);
-        };
-
-        request.onerror = () => reject(request.error);
-      });
-    },
-    {
-      stageId,
-      courseName,
-      slideMediaRef,
-      storedMediaRef,
-      storedError,
-      extraStoredMediaRefs,
-      posterBase64: POSTER_BASE64,
-      theme: defaultTheme,
-    },
-  );
-
+            ],
+          },
+        },
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    outline: { outlines: [], createdAt: now, updatedAt: now },
+  });
   await page.goto('/', { waitUntil: 'networkidle' });
+  return stageId;
 }
 
 test.describe('Home recent video thumbnails', () => {
   test('renders generated video thumbnails and opens the card from the preview area', async ({
     page,
   }) => {
-    await seedVideoThumbnailStage({ page });
+    const stageId = await seedVideoThumbnailStage(page, 'Video Thumbnail Course');
 
     const card = page.locator('.group.cursor-pointer').filter({
       hasText: 'Video Thumbnail Course',
     });
-    const video = card.locator('[data-video-element] video');
+    const poster = card.locator('[data-video-element] [data-thumbnail-video-poster]');
 
-    await expect(video).toBeVisible({ timeout: 10_000 });
-    await expect(video).toHaveAttribute('src', /^blob:/);
-    await expect(video).toHaveAttribute('poster', /^blob:/);
-    await expect(video).not.toHaveAttribute('controls', '');
+    // The thumbnail draws the video by its poster and never loads the video.
+    await expect(poster).toBeVisible({ timeout: 10_000 });
+    await expect(poster).toHaveAttribute('src', /^blob:/);
+    await expect(card.locator('video')).toHaveCount(0);
     await expect(card.locator('[data-testid="thumbnail-video-indicator"]')).toBeVisible();
 
     await card.click({ position: { x: 24, y: 24 } });
-    await page.waitForURL(`**/classroom/${TEST_STAGE_ID}`);
+    await page.waitForURL(`**/classroom/${stageId}`);
 
     const classroomVideo = page.locator('[data-video-element] video[controls]');
     await expect(classroomVideo).toHaveCount(1);
@@ -202,51 +105,48 @@ test.describe('Home recent video thumbnails', () => {
     await expect(classroomVideo).toHaveAttribute('src', /^blob:/);
   });
 
-  test('falls back from legacy gen_vid_1 refs to the single stored video media file', async ({
+  test('draws video thumbnails without loading the videos, so the page has no failed requests', async ({
     page,
   }) => {
-    await seedVideoThumbnailStage({
-      page,
-      stageId: LEGACY_STAGE_ID,
-      courseName: 'Legacy Video Ref Course',
-      slideMediaRef: LEGACY_VIDEO_REF,
-      storedMediaRef: UNIQUE_VIDEO_REF,
+    const prefix = `No Abort ${crypto.randomUUID().slice(0, 6)}`;
+    const decodable = new Uint8Array(Buffer.from(TINY_MP4_BASE64, 'base64'));
+    await seedVideoThumbnailStage(page, `${prefix} poster`, { bytes: decodable, withPoster: true });
+    // Generated videos usually come without a poster: the opening frame stands in.
+    await seedVideoThumbnailStage(page, `${prefix} frame`, { bytes: decodable, withPoster: false });
+
+    const failed: string[] = [];
+    const mediaLoads: string[] = [];
+    page.on('requestfailed', (request) => {
+      // Next.js may release an RSC prefetch stream it has fully received before
+      // the browser sees its end, which the browser reports as aborted.
+      if (new URL(request.url()).searchParams.has('_rsc')) return;
+      failed.push(`${request.resourceType()} ${request.url()} ${request.failure()?.errorText}`);
+    });
+    page.on('request', (request) => {
+      if (request.resourceType() === 'media') mediaLoads.push(request.url());
     });
 
-    const card = page.locator('.group.cursor-pointer').filter({
-      hasText: 'Legacy Video Ref Course',
-    });
-    const thumbnailVideo = card.locator('[data-video-element] video');
+    const cards = page.locator('.group.cursor-pointer').filter({ hasText: prefix });
+    const posters = cards.locator('[data-video-element] [data-thumbnail-video-poster]');
+    const shown = async () => {
+      await expect(cards).toHaveCount(2);
+      await expect(posters).toHaveCount(2, { timeout: 15_000 });
+      for (const poster of await posters.all()) {
+        await expect(poster).toHaveAttribute('src', /^blob:/);
+        await expect
+          .poll(() => poster.evaluate((img: HTMLImageElement) => img.naturalWidth))
+          .toBeGreaterThan(0);
+      }
+      await expect(cards.locator('video')).toHaveCount(0);
+    };
 
-    await expect(thumbnailVideo).toBeVisible({ timeout: 10_000 });
-    await expect(thumbnailVideo).toHaveAttribute('src', /^blob:/);
-    await expect(card.locator('[data-testid="thumbnail-video-indicator"]')).toBeVisible();
+    await page.goto('/');
+    await shown();
+    // And from the device cache.
+    await page.reload();
+    await shown();
 
-    await card.click({ position: { x: 24, y: 24 } });
-    await page.waitForURL(`**/classroom/${LEGACY_STAGE_ID}`);
-
-    const classroomVideo = page.locator('[data-video-element] video[controls]');
-    await expect(classroomVideo).toHaveCount(1);
-    await expect(classroomVideo).toBeVisible({ timeout: 10_000 });
-    await expect(classroomVideo).toHaveAttribute('src', /^blob:/);
-  });
-
-  test('does not fall back to another video when the exact legacy ref failed', async ({ page }) => {
-    await seedVideoThumbnailStage({
-      page,
-      stageId: FAILED_EXACT_STAGE_ID,
-      courseName: 'Failed Exact Video Ref Course',
-      slideMediaRef: LEGACY_VIDEO_REF,
-      storedMediaRef: LEGACY_VIDEO_REF,
-      storedError: 'Generation failed',
-      extraStoredMediaRefs: [OTHER_VIDEO_REF],
-    });
-
-    const card = page.locator('.group.cursor-pointer').filter({
-      hasText: 'Failed Exact Video Ref Course',
-    });
-
-    await expect(card.locator('[data-testid="thumbnail-video-indicator"]')).toBeVisible();
-    await expect(card.locator('[data-video-element] video')).toHaveCount(0);
+    expect(mediaLoads).toEqual([]);
+    expect(failed).toEqual([]);
   });
 });

@@ -23,6 +23,7 @@ import {
 } from '@/lib/chat/pi/config';
 import { runPiDirectorLoop } from '@/lib/chat/pi/director-loop';
 import type { SendEvent } from '@/lib/chat/pi/types';
+import { requestWorkspaceId } from '@/lib/server/model-config/runtime';
 import { resolveModel } from '@/lib/server/resolve-model';
 import { parseUserStageRoutes } from '@/lib/server/model-routes';
 import { apiError } from '@/lib/server/api-response';
@@ -30,7 +31,11 @@ import type { ThinkingConfig } from '@/lib/types/provider';
 import type { StatelessChatRequest } from '@/lib/types/chat';
 import { resolveClassroomWebSearchConfig } from '@/lib/server/web-search-config';
 import { resolveRequestOwner } from '@/lib/server/identity/resolve';
-import { invalidOwnerCredentialResponse } from '@/lib/server/identity/with-owner';
+import {
+  attachOwnerCookies,
+  invalidOwnerCredentialResponse,
+} from '@/lib/server/identity/with-owner';
+import type { OwnerPrincipal } from '@/lib/server/identity/types';
 import { guardedServerRuntimeStore } from '@/lib/persistence/runtime-tombstone-guard';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import { createWhiteboardRuntimeService } from '@/lib/whiteboard/runtime/store';
@@ -42,8 +47,6 @@ import {
 } from '@/lib/chat/pi/element-reference';
 
 const log = createLogger('Pi Chat API');
-
-export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   if (!isPiChatEnabled()) {
@@ -60,7 +63,13 @@ export async function POST(req: NextRequest) {
   if (!owner.ok) {
     return invalidOwnerCredentialResponse();
   }
+  // Every answer carries the resolution's cookies (the anonymous owner's
+  // renewal), errors included; the stream gets them on its headers before
+  // its body starts.
+  return attachOwnerCookies(await chat(req, owner.principal), owner.setCookies);
+}
 
+async function chat(req: NextRequest, principal: OwnerPrincipal): Promise<Response> {
   const encoder = new TextEncoder();
   let chatModel: string | undefined;
   let chatMessageCount: number | undefined;
@@ -143,6 +152,7 @@ export async function POST(req: NextRequest) {
     } = await resolveModel({
       modelString: body.model,
       stage: 'chat-adapter',
+      workspaceId: await requestWorkspaceId(req),
       // Honor the classroom-interaction per-stage override the client sends in
       // `x-model-routes`. A routed stage brings its own key and base URL; otherwise the body credentials are used (never x-* headers).
       userRoutes: parseUserStageRoutes(req.headers.get('x-model-routes')),
@@ -214,12 +224,11 @@ export async function POST(req: NextRequest) {
       enableWhiteboardTools &&
       nativeWhiteboardRequested &&
       validRequestStartStageId &&
-      process.env.NEXT_PUBLIC_PERSISTENCE === '1' &&
       process.env.DATABASE_URL
     ) {
       // The runtime learner key is the request owner, exactly as on
       // /api/persistence/runtime/*; nothing the client sends chooses it.
-      const learnerKey = owner.principal.ownerId;
+      const learnerKey = principal.ownerId;
       try {
         const provider = await getServerPersistenceProvider(process.env.DATABASE_URL);
         nativeWhiteboardLearnerKey = learnerKey;
@@ -233,11 +242,11 @@ export async function POST(req: NextRequest) {
         log.warn('Native whiteboard capability unavailable: persistence initialization failed');
       }
     }
-    let nativeWebSearchConfig: ReturnType<typeof resolveClassroomWebSearchConfig>;
+    let nativeWebSearchConfig: Awaited<ReturnType<typeof resolveClassroomWebSearchConfig>>;
     try {
       nativeWebSearchConfig =
         childRuntimeMode === 'native'
-          ? resolveClassroomWebSearchConfig({
+          ? await resolveClassroomWebSearchConfig(await requestWorkspaceId(req), {
               webSearchProviderId: body.webSearchProviderId,
               webSearchApiKey: body.webSearchApiKey,
               webSearchBaseUrl: body.webSearchBaseUrl,

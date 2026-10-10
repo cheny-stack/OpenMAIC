@@ -11,6 +11,7 @@ import { createStorageHttpHandler } from '@openmaic/storage/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { APP_RUNTIME_PAYLOAD_VALIDATORS } from '@/lib/runtime/payload-validators';
+import { createWhiteboardRuntimeService } from '@/lib/whiteboard/runtime/store';
 import type {
   WhiteboardRuntimeOperationV1,
   WhiteboardRuntimePayloadV1,
@@ -117,10 +118,14 @@ beforeEach(() => {
   vi.stubGlobal('IDBKeyRange', IDBKeyRange);
 });
 
-describe('default BrowserRuntimeStore app payload wiring', () => {
+describe('app runtime payload validators', () => {
   it('retains chat/quiz gates and adds the whiteboard gate', async () => {
-    const { getRuntimeStore } = await import('@/lib/runtime/store');
-    const store = getRuntimeStore();
+    // The same validator map the embedded persistence endpoint applies.
+    const store = new BrowserRuntimeStore({
+      indexedDB: new IDBFactory(),
+      dbName: 'whiteboard-payload-wiring',
+      payloadValidators: APP_RUNTIME_PAYLOAD_VALIDATORS,
+    });
     const now = '2026-08-06T00:00:00.000Z';
     for (const kind of ['chat', 'quizAttempt', 'whiteboard']) {
       await store.createSession({
@@ -427,5 +432,59 @@ describe('default BrowserRuntimeStore app payload wiring', () => {
       expectedLastSeq: null,
       actualLastSeq: 0,
     });
+  });
+
+  it('hydrates an absent learner board through HTTP without a 404 point read', async () => {
+    const runtime = new BrowserRuntimeStore({
+      indexedDB: new IDBFactory(),
+      dbName: 'whiteboard-http-absent',
+      payloadValidators: APP_RUNTIME_PAYLOAD_VALIDATORS,
+    });
+    const documents = new BrowserDocumentStore({ indexedDB: new IDBFactory() });
+    const handler = createStorageHttpHandler(runtime, documents, {
+      authenticate: async () => ({ learnerKey: 'local' }),
+      authorizeDocuments: async () => false,
+      payloadValidators: APP_RUNTIME_PAYLOAD_VALIDATORS,
+    });
+    const transport = handlerFetch(handler);
+    const responses: string[] = [];
+    const client = new HttpRuntimeStore({
+      baseUrl: 'http://whiteboard-storage.invalid',
+      fetch: async (input, init) => {
+        const response = await transport(input, init);
+        const { pathname } = new URL(new Request(input, init).url);
+        responses.push(`${init?.method ?? 'GET'} ${response.status} ${pathname}`);
+        return response;
+      },
+    });
+    const whiteboard = createWhiteboardRuntimeService({
+      store: client,
+      resolveLearnerKey: () => 'local',
+      now: () => NOW,
+      withMaintenanceLock: (work) => work(),
+    });
+
+    // Every classroom mount and whiteboard open hydrates the board before
+    // anything has been drawn: an absent session is the normal state.
+    for (let i = 0; i < 3; i++) {
+      await expect(whiteboard.read('stage-1')).resolves.toEqual({
+        sessionId: null,
+        whiteboard: null,
+        lastSeq: null,
+      });
+    }
+    expect(responses.filter((line) => !/ 2\d\d /.test(line))).toEqual([]);
+    expect(responses.every((line) => line.endsWith('/learners/local/sessions'))).toBe(true);
+
+    await whiteboard.append({
+      stageId: 'stage-1',
+      expectedLastSeq: null,
+      payload: validElementPayload('element-add:first'),
+    });
+    await expect(whiteboard.read('stage-1')).resolves.toMatchObject({
+      sessionId: 'whiteboard:stage-1:local',
+      lastSeq: 0,
+    });
+    expect(responses.filter((line) => !/ 2\d\d /.test(line))).toEqual([]);
   });
 });

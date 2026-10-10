@@ -3,11 +3,11 @@
 /**
  * Convert a course's pre-allocation narration to stored assets, for free.
  *
- * A course narrated before this application stored media server-side holds a
- * derived key on every speech action -- `tts_s<order>_<action>` -- and the
- * bytes for it only in this browser's local audio table. The document outlives
- * the browser now, so those references are a promise the course cannot keep:
- * the author's next device, and every visitor, reads an id nothing can resolve.
+ * A speech action whose narration the store refused for want of room keeps a
+ * derived key -- `tts_s<order>_<action>` -- and the bytes for it only in this
+ * browser's local audio table. The document outlives the browser, so that
+ * reference is a promise the course cannot keep: the author's next device, and
+ * every visitor, reads an id nothing can resolve.
  *
  * The bytes are already paid for, so the author's own browser converts them
  * rather than re-synthesizing: allocate the clip in the pool, write the
@@ -29,8 +29,6 @@
  *   matches the action being converted.
  * - It does not run for a visitor. Ownership is the same gate every other
  *   spending or writing path uses, and it fails closed.
- * - It does not run in browser-only mode, where a derived key is a complete
- *   address and the document and the audio share one lifetime.
  * - It does not synthesize anything. A speech action whose bytes are not here,
  *   or whose only candidate row cannot be shown to belong to it, is left
  *   exactly as it is, still carrying its derived id. That narration is lost,
@@ -42,8 +40,7 @@ import { mayGenerateForStage } from '@/lib/classroom/generation-permission';
 import { createLogger } from '@/lib/logger';
 import { mayNameAPoolAsset } from '@/lib/media/media-placeholder';
 import { isConcreteMediaAddress } from '@/lib/media/resolve-media-ref';
-import { isServerBackedMediaPersistence } from '@/lib/persistence/media-persistence';
-import { db, type AudioFileRecord } from '@/lib/utils/database';
+import { db, type AudioFileRecord } from '@/lib/device-storage/database';
 
 import { persistNarrationReference } from './persist-narration-reference';
 
@@ -80,8 +77,8 @@ const log = createLogger('NarrationAdoption');
  * should: it is no protection against a stalled upload. The queued rescan is
  * chained off the run in flight, so a `putAsset` that never settles leaves the
  * rescan unstarted and every waiting caller pending, exactly as a chain would.
- * That is the same uncancellable tail the media pass has, recorded as a known
- * limitation rather than solved here.
+ * That is the same uncancellable tail every pool commit has, recorded as a
+ * known limitation rather than solved here.
  */
 const runsByStage = new Map<string, Promise<unknown>>();
 
@@ -105,7 +102,7 @@ export interface NarrationAdoptionOutcome {
 }
 
 /** A derived reference and the text of the action that carries it. */
-interface DerivedNarration {
+export interface DerivedNarration {
   readonly derivedRef: string;
   readonly text: string;
 }
@@ -208,8 +205,11 @@ function derivedKeyIsUnique(derivedRef: string): boolean {
  * matching text proves nothing there. Refusing such a row costs one course its
  * cached narration; adopting the wrong one writes another course's audio into
  * a shared document permanently.
+ *
+ * Also applied by the one-way importer (`lib/legacy-browser-import/`) to rows
+ * of the pre-server browser database, for the same reason.
  */
-function rowBelongsToAction(
+export function rowBelongsToAction(
   row: AudioFileRecord,
   stageId: string,
   action: DerivedNarration,
@@ -318,7 +318,6 @@ async function adoptCachedNarrationRun(
   abortSignal?: AbortSignal,
 ): Promise<NarrationAdoptionOutcome> {
   const idle: NarrationAdoptionOutcome = { adopted: 0, unbacked: 0 };
-  if (!isServerBackedMediaPersistence()) return idle;
   // Fail-closed: 'owner' is the only answer that may write.
   if (!mayGenerateForStage(stageId)) return idle;
 
@@ -329,20 +328,11 @@ async function adoptCachedNarrationRun(
   const actions = derivedNarrationRefs(useStageStore.getState().scenes);
   if (actions.length === 0) return idle;
 
-  // No marker is read here, and none is written. The store checks each write
-  // against the headroom it has left, so "refused for want of room" is a fact
-  // about one blob; adoption pays no provider for a refusal, so it needs no
-  // deck-wide memory of one either. It attempts, every load, every clip it
-  // holds that an earlier refusal in the same run has not already answered for,
-  // and lets the ones that do not fit wait for a bigger ceiling.
-  //
-  // Sharing the media pass's marker was tried across several rounds and the
-  // coupling is what kept failing: the flag means "do not spend money here",
-  // which is a claim adoption is in no position to make. One clip larger than
-  // current headroom was enough to stand a course's whole image pass down
-  // indefinitely -- on a store that had just accepted adoption's other clips.
-  // The marker is now written only by the paths whose refusal cost a provider
-  // call.
+  // The store checks each write against the headroom it has left, so "refused
+  // for want of room" is a fact about one blob; adoption pays no provider for a
+  // refusal, so it needs no deck-wide memory of one. It attempts, every load,
+  // every clip it holds that an earlier refusal in the same run has not already
+  // answered for, and lets the ones that do not fit wait for a bigger ceiling.
   //
   // What keeps a load bounded is not memory of an earlier load but the store's
   // own arithmetic, applied within this one. The rule is
@@ -418,16 +408,6 @@ async function adoptCachedNarrationRun(
     // where the next load looks for them. A refusal here loses nothing and
     // costs no provider call.
     const outcome = await commitToPool<NarrationPlacement>({
-      // A write that goes through retires this course's "no room" note, at the
-      // seam rather than here. Together with generated narration this is the
-      // only path that can establish that for a course whose media needs
-      // nothing, and it is worth naming what it costs: a few hundred bytes of
-      // narration fit in headroom an image does not, so retiring the note can
-      // let the next pass pay a provider for an image that is refused again.
-      // Bounded at one such generation, because that pass re-marks and adoption
-      // converts everything that fits in a single load, and the alternative is
-      // a course whose media never generates again.
-      stageId,
       slot: action.derivedRef,
       bytes: row.blob,
       mimeType: row.blob.type || `audio/${row.format}`,

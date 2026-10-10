@@ -34,7 +34,7 @@
  * reclaims is the one where nothing could possibly hold the id — no store write
  * was ever issued and no live scene took it.
  */
-import { mutateDocument } from '@/lib/document-store';
+import { mutateDocument, type DocumentMigrationDeps } from '@/lib/document-store';
 import { createLogger } from '@/lib/logger';
 import { markStagePersistenceDirty, useStageStore } from '@/lib/store/stage';
 import type { Scene } from '@/lib/types/stage';
@@ -52,10 +52,6 @@ import {
   recordPendingMediaAllocation,
   type PendingMediaAllocation,
 } from './pending-media-allocations';
-import {
-  applyPendingMediaAllocationsToScene,
-  sceneHasPendingMediaAllocation,
-} from './reconcile-scene-media';
 
 const log = createLogger('MediaReferenceWriteBack');
 
@@ -132,35 +128,6 @@ function applyToLiveStage(stageId: string, rewrite: GeneratedMediaReferenceRewri
 }
 
 /**
- * Hand every parked allocation to the open course's scene that now wants it.
- *
- * A scene can be committed while a write-back's round trip is in flight; its
- * own reconciliation ran against a registry that did not yet hold the entry, so
- * the entry would otherwise sit there for a scene that will never be added
- * again — and, worse, answer the skip test as "already handled". This is the
- * second look that keeps that from happening; it is also what makes a parked
- * allocation converge on a later generation pass rather than only at commit.
- */
-export function placePendingMediaAllocations(stageId: string): boolean {
-  const state = useStageStore.getState();
-  if (state.stage?.id !== stageId) return false;
-
-  const dirty: PendingChange[] = [];
-  const scenes = state.scenes.map((scene) => {
-    if (!sceneHasPendingMediaAllocation(scene)) return scene;
-    const next = cloneScene(scene);
-    if (!applyPendingMediaAllocationsToScene(next)) return scene;
-    dirty.push({ kind: 'scene', sceneId: next.id });
-    return next;
-  });
-
-  if (dirty.length === 0) return false;
-  useStageStore.setState({ scenes });
-  markStagePersistenceDirty(dirty);
-  return true;
-}
-
-/**
  * Point the document at stored bytes.
  *
  * Throws {@link MediaReferenceWriteBackError} if the document store refuses the
@@ -170,6 +137,8 @@ export function placePendingMediaAllocations(stageId: string): boolean {
  */
 export async function persistGeneratedMediaReference(
   allocation: PendingMediaAllocation,
+  /** A document store other than the app's (the one-way importer's fenced one). */
+  deps: Pick<DocumentMigrationDeps, 'store'> = {},
 ): Promise<MediaReferenceWriteBackResult> {
   const { stageId } = allocation;
   const rewrite = rewriteOf(allocation);
@@ -190,21 +159,25 @@ export async function persistGeneratedMediaReference(
   };
 
   try {
-    await mutateDocument(stageId, async (document, store) => {
-      if (!document) return;
-      const now = Date.now();
-      for (const scene of document.scenes) {
-        if (!rewriteSceneMediaReference(scene, rewrite)) continue;
-        issuingWrite();
-        await store.putScene(stageId, { ...scene, updatedAt: now });
-        documentMatched = true;
-      }
-      if (rewriteStageMediaReference(document.stage, rewrite)) {
-        issuingWrite();
-        await store.putStage(stageId, { ...document.stage, updatedAt: now });
-        documentMatched = true;
-      }
-    });
+    await mutateDocument(
+      stageId,
+      async (document, store) => {
+        if (!document) return;
+        const now = Date.now();
+        for (const scene of document.scenes) {
+          if (!rewriteSceneMediaReference(scene, rewrite)) continue;
+          issuingWrite();
+          await store.putScene(stageId, { ...scene, updatedAt: now });
+          documentMatched = true;
+        }
+        if (rewriteStageMediaReference(document.stage, rewrite)) {
+          issuingWrite();
+          await store.putStage(stageId, { ...document.stage, updatedAt: now });
+          documentMatched = true;
+        }
+      },
+      deps,
+    );
   } catch (error) {
     // Whatever the document did or did not receive, the live store must not be
     // left behind it: the next ordinary flush writes the live snapshot, and a

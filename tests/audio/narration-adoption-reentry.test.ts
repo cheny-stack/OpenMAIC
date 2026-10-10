@@ -29,7 +29,6 @@ const mocks = vi.hoisted(() => ({
   putAsset: vi.fn(),
   audioGet: vi.fn(),
   audioPut: vi.fn(),
-  serverBacked: vi.fn(),
 }));
 
 vi.mock('@/lib/document-store', () => ({ mutateDocument: mocks.mutateDocument }));
@@ -38,14 +37,10 @@ vi.mock('@/lib/utils/stage-storage', () => ({
   saveStageData: mocks.saveStageData,
 }));
 vi.mock('@/lib/media/asset-pool', () => ({ putAsset: mocks.putAsset }));
-vi.mock('@/lib/utils/database', () => ({
+vi.mock('@/lib/device-storage/database', () => ({
   db: { audioFiles: { get: mocks.audioGet, put: mocks.audioPut } },
 }));
-vi.mock('@/lib/persistence/media-persistence', () => ({
-  isServerBackedMediaPersistence: mocks.serverBacked,
-}));
 
-import { setAssetStorageFullStoreForTests } from '@/lib/media/asset-storage-full';
 import { useNarrationAdoption } from '@/lib/audio/use-narration-adoption';
 import {
   noteStageGenerationOwnership,
@@ -121,23 +116,11 @@ function openCourse(id: string, scenes: Scene[]): void {
 
 describe('narration adoption across a course re-entry', () => {
   beforeEach(() => {
-    const entries = new Map<string, unknown>();
-    setAssetStorageFullStoreForTests({
-      get: async <T>(key: string) => (entries.get(key) as T) ?? null,
-      set: async (key: string, value: unknown) => {
-        entries.set(key, value);
-      },
-      remove: async (key: string) => {
-        entries.delete(key);
-      },
-      keys: async (prefix = '') => [...entries.keys()].filter((key) => key.startsWith(prefix)),
-    });
     resetGenerationPermissionsForTests();
     noteStageGenerationOwnership(stageId, 'owner');
     mocks.saveStageData.mockReset().mockResolvedValue(undefined);
     mocks.saveStageDataIncremental.mockReset().mockResolvedValue(undefined);
     mocks.audioPut.mockReset().mockResolvedValue(undefined);
-    mocks.serverBacked.mockReset().mockReturnValue(true);
     // Rows of the shape a course narrated before allocation existed actually
     // has: the derived key, and neither a stage nor the text.
     mocks.audioGet.mockReset().mockImplementation(async (id: string) => ({
@@ -164,7 +147,6 @@ describe('narration adoption across a course re-entry', () => {
 
   afterEach(async () => {
     for (const root of roots.splice(0)) await act(async () => root.unmount());
-    setAssetStorageFullStoreForTests(undefined);
     resetGenerationPermissionsForTests();
     useStageStore.setState({ stage: null, scenes: [] });
   });

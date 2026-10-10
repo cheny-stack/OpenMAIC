@@ -12,6 +12,7 @@
  * - MiniMax TTS: https://platform.minimaxi.com/docs/api-reference/speech-t2a-http
  * - Doubao TTS: https://www.volcengine.com/docs/6561/1257543
  * - ElevenLabs TTS: https://elevenlabs.io/docs/api-reference/text-to-speech/convert
+ * - Google Gemini TTS: https://ai.google.dev/gemini-api/docs/speech-generation
  * - Browser Native: Web Speech API (client-side only)
  *
  * HOW TO ADD A NEW PROVIDER:
@@ -94,7 +95,12 @@
 
 import type { TTSModelConfig } from './types';
 import { isCustomTTSProvider } from './types';
-import { isQwenCloneVoice, resolveTTSModelForVoice, TTS_PROVIDERS } from './constants';
+import {
+  isQwenCloneVoice,
+  resolveTTSModelForVoice,
+  TTS_PROVIDERS,
+  DEFAULT_TTS_VOICES,
+} from './constants';
 import { downloadAudio, QwenVoiceCloneError, synthesizeQwenVoiceClone } from './qwen-voice-clone';
 import { evictQwenVoiceRegistrationMemo } from './qwen-voice-clone-registration';
 import { splitConcatenatedJsonObjects } from './json-stream';
@@ -111,7 +117,9 @@ import {
   audioProviderFetch,
   type AudioEndpointTarget,
 } from '@/lib/server/audio-provider-fetch';
+import { ProviderQuotaExhaustedError } from '@/lib/server/provider-quota';
 import { appAttributionHeaders } from '@/lib/config/app-attribution';
+import { pcmS16leMonoToWav } from './pcm-wav';
 
 const log = createLogger('TTSProviders');
 
@@ -152,8 +160,9 @@ export class TTSRateLimitError extends Error {
     public readonly provider: string,
     message: string,
     retryAfterMs?: number,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = 'TTSRateLimitError';
     if (retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
       this.retryAfterMs = retryAfterMs;
@@ -263,12 +272,14 @@ export function throwIfTtsRateLimited(
   provider: string,
   status: number,
   retryAfterHeader?: string | null,
+  options?: ErrorOptions,
 ): void {
   if (status === 429) {
     throw new TTSRateLimitError(
       provider,
       `${provider} TTS rate limit exceeded (HTTP 429)`,
       parseRetryAfterMs(retryAfterHeader),
+      options,
     );
   }
 }
@@ -318,6 +329,9 @@ export async function generateTTS(
         return await generateDoubaoTTS(config, text, signal);
       case 'elevenlabs-tts':
         return await generateElevenLabsTTS(config, text, signal);
+
+      case 'google-tts':
+        return await generateGoogleTTS(config, text, signal);
 
       case 'lemonade-tts':
         return await generateLemonadeTTS(config, text, signal);
@@ -405,9 +419,13 @@ async function generateOpenAITTS(
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('OpenAI', response.status, response.headers?.get('retry-after'));
+    const error = await response.json().catch(() => ({ error: response.statusText }));
+    // Retain the response without changing the HTTP status used by route retries.
+    const options = { cause: { data: error } };
+    throwIfTtsRateLimited('OpenAI', response.status, response.headers?.get('retry-after'), options);
     throw new Error(
-      `OpenAI TTS API error (${response.status}): ${await readTTSApiError(response)}`,
+      `OpenAI TTS API error: ${error.error?.message || response.statusText}`,
+      options,
     );
   }
 
@@ -836,11 +854,9 @@ async function readTTSApiError(response: Response): Promise<string> {
   if (!text) return response.statusText;
   try {
     const json = JSON.parse(text) as {
-      details?: unknown;
       detail?: unknown;
       error?: { message?: string } | string;
     };
-    if (typeof json.details === 'string') return json.details;
     if (typeof json.detail === 'string') return json.detail;
     if (typeof json.error === 'object' && json.error?.message) return json.error.message;
     if (typeof json.error === 'string') return json.error;
@@ -1067,6 +1083,13 @@ async function generateQwenTTS(
  */
 const MINIMAX_RATE_LIMIT_STATUS_CODES = new Set([1002, 1039, 1041, 2045]);
 
+/**
+ * MiniMax plan and balance exhaustion, as opposed to its rate limits:
+ * 1008 insufficient balance, 2056 usage limit exceeded (the plan's window).
+ * https://platform.minimax.io/docs/api-reference/errorcode
+ */
+const MINIMAX_QUOTA_STATUS_CODES = new Set([1008, 2056]);
+
 function minimaxStatusCode(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim() !== '') {
@@ -1074,6 +1097,26 @@ function minimaxStatusCode(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+/** The `base_resp.status_code` of a MiniMax error response body, if it has one. */
+function minimaxBodyStatusCode(body: string): number | undefined {
+  try {
+    const parsed = JSON.parse(body) as { base_resp?: { status_code?: unknown } } | null;
+    return minimaxStatusCode(parsed?.base_resp?.status_code);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A MiniMax quota code as the provider-neutral quota error; undefined for any other code. */
+function minimaxQuotaError(
+  statusCode: number | undefined,
+  message: string,
+): ProviderQuotaExhaustedError | undefined {
+  return statusCode !== undefined && MINIMAX_QUOTA_STATUS_CODES.has(statusCode)
+    ? new ProviderQuotaExhaustedError('MiniMax', message)
+    : undefined;
 }
 
 /** Any non-zero MiniMax `base_resp.status_code` is a failure, even with audio bytes. */
@@ -1097,7 +1140,8 @@ function throwIfMiniMaxBaseRespFailed(
     );
   }
 
-  throw new Error(`MiniMax TTS API error (${statusCode}): ${statusMsg}`);
+  const message = `MiniMax TTS API error (${statusCode}): ${statusMsg}`;
+  throw minimaxQuotaError(statusCode, message) ?? new Error(message);
 }
 
 /**
@@ -1142,9 +1186,18 @@ async function generateMiniMaxTTS(
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('MiniMax', response.status, response.headers?.get('retry-after'));
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`MiniMax TTS API error: ${errorText}`);
+    const message = `MiniMax TTS API error: ${errorText}`;
+    // A quota code in the body says what the HTTP status does not; an HTTP 429
+    // keeps its rate-limit type and carries the quota error as its cause.
+    const quota = minimaxQuotaError(minimaxBodyStatusCode(errorText), message);
+    throwIfTtsRateLimited(
+      'MiniMax',
+      response.status,
+      response.headers?.get('retry-after'),
+      quota ? { cause: quota } : undefined,
+    );
+    throw quota ?? new Error(message);
   }
 
   const data = await response.json();
@@ -1169,102 +1222,94 @@ async function generateMiniMaxTTS(
 }
 
 /**
- * MiMo V2.5 TTS implementation (OpenAI-compatible chat completions).
- *
- * MiMo receives delivery direction in the user message and the exact speech in
- * the assistant message. The non-streaming response returns Base64 WAV bytes
- * at `choices[0].message.audio.data`.
+ * Google Gemini TTS via the Interactions API.
+ * Response audio is raw 24 kHz mono s16le PCM; wrap as WAV for classroom playback.
  */
-async function generateMimoTTS(
+async function generateGoogleTTS(
   config: TTSModelConfig,
   text: string,
   signal: AbortSignal,
 ): Promise<TTSGenerationResult> {
-  const baseUrl = (config.baseUrl || TTS_PROVIDERS['mimo-tts'].defaultBaseUrl || '').replace(
-    /\/+$/,
+  const baseUrl = (config.baseUrl || TTS_PROVIDERS['google-tts'].defaultBaseUrl || '').replace(
+    /\/$/,
     '',
   );
-  const endpoint = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+  const modelId = config.modelId || TTS_PROVIDERS['google-tts'].defaultModelId;
+  const voice = config.voice || DEFAULT_TTS_VOICES['google-tts'] || 'Kore';
 
-  const response = await ttsFetch(config, endpoint, {
+  const response = await ttsFetch(config, `${baseUrl}/interactions`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${config.apiKey}`,
+      'x-goog-api-key': config.apiKey!,
       'Content-Type': 'application/json; charset=utf-8',
+      ...appAttributionHeaders(baseUrl),
     },
     body: JSON.stringify({
-      model: config.modelId || TTS_PROVIDERS['mimo-tts'].defaultModelId,
-      messages: [
-        { role: 'user', content: mimoDeliveryInstruction(config.speed) },
-        { role: 'assistant', content: text },
-      ],
-      audio: {
-        format: 'wav',
-        voice: config.voice || TTS_PROVIDERS['mimo-tts'].voices[0].id,
+      model: modelId,
+      input: text,
+      response_format: { type: 'audio' },
+      generation_config: {
+        speech_config: [{ voice }],
       },
-      stream: false,
     }),
     signal,
   });
 
   if (!response.ok) {
-    throwIfTtsRateLimited('MiMo', response.status);
-    throw new Error(`MiMo TTS API error (${response.status}): ${await readTTSApiError(response)}`);
+    throwIfTtsRateLimited('Google', response.status, response.headers?.get('retry-after'));
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Google Gemini TTS API error: ${errorText || response.statusText}`);
   }
 
-  let data: unknown;
-  try {
-    data = await response.json();
-  } catch {
-    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned malformed JSON');
+  const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  const audio = extractGoogleInteractionsAudio(payload);
+  if (!audio) {
+    throw new Error('Google Gemini TTS API error: response missing audio data');
   }
 
-  const audioBase64 = (
-    data as {
-      choices?: Array<{ message?: { audio?: { data?: unknown } } }>;
-    }
-  )?.choices?.[0]?.message?.audio?.data;
-  if (typeof audioBase64 !== 'string' || !audioBase64.trim()) {
-    throw new TTSInvalidResponseError(
-      'MiMo',
-      'MiMo TTS response is missing choices[0].message.audio.data',
-    );
+  const pcm = new Uint8Array(Buffer.from(audio.data, 'base64'));
+  if (pcm.byteLength === 0) {
+    throw new Error('Google Gemini TTS API error: empty audio payload');
   }
 
   return {
-    audio: decodeMimoAudio(audioBase64),
+    audio: pcmS16leMonoToWav(pcm, audio.sampleRate),
     format: 'wav',
   };
 }
 
-/** Keep speed natural-language because MiMo exposes delivery through messages. */
-function mimoDeliveryInstruction(speed?: number): string {
-  const normalized = speed && Number.isFinite(speed) ? speed : 1;
-  if (Math.abs(normalized - 1) < 0.01) return 'Speak naturally and clearly.';
-  if (normalized < 1) {
-    return `Speak naturally and clearly at a slower pace, about ${normalized.toFixed(2)} times normal speed.`;
+/**
+ * Interactions REST responses put audio on `steps[].content[]`, not on the
+ * SDK convenience field `output_audio`. See speech-generation single-speaker docs.
+ */
+function extractGoogleInteractionsAudio(
+  payload: Record<string, unknown> | null,
+): { data: string; sampleRate: number } | null {
+  if (!payload || !Array.isArray(payload.steps)) return null;
+
+  for (const step of payload.steps) {
+    if (!step || typeof step !== 'object') continue;
+    const content = (step as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue;
+      const block = part as { type?: unknown; data?: unknown; mime_type?: unknown };
+      if (block.type !== 'audio' || typeof block.data !== 'string' || block.data.length === 0) {
+        continue;
+      }
+      return { data: block.data, sampleRate: sampleRateFromL16Mime(block.mime_type) };
+    }
   }
-  return `Speak naturally and clearly at a faster pace, about ${normalized.toFixed(2)} times normal speed.`;
+
+  return null;
 }
 
-function decodeMimoAudio(value: string): Uint8Array {
-  const compact = value.replace(/\s/g, '');
-  if (!compact || compact.length % 4 === 1 || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
-    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned invalid Base64 audio data');
-  }
-
-  const audio = new Uint8Array(Buffer.from(compact, 'base64'));
-  if (audio.length === 0) {
-    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned empty audio data');
-  }
-  if (
-    audio.length < 12 ||
-    Buffer.from(audio.subarray(0, 4)).toString('ascii') !== 'RIFF' ||
-    Buffer.from(audio.subarray(8, 12)).toString('ascii') !== 'WAVE'
-  ) {
-    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned invalid WAV audio data');
-  }
-  return audio;
+/** `audio/l16;rate=24000` → 24000. Missing or unparseable rate stays at 24 kHz. */
+function sampleRateFromL16Mime(mime: unknown): number {
+  if (typeof mime !== 'string') return 24_000;
+  const match = /(?:^|[;\s])rate=(\d+)/i.exec(mime);
+  const rate = match ? Number(match[1]) : NaN;
+  return Number.isFinite(rate) && rate > 0 ? rate : 24_000;
 }
 
 /**
@@ -1317,34 +1362,6 @@ async function generateElevenLabsTTS(
   }
 
   return await validateTTSAudioResponse(response, 'ElevenLabs', requestedFormat);
-}
-
-/**
- * Get current TTS configuration from settings store
- * Note: This function should only be called in browser context
- */
-export async function getCurrentTTSConfig(): Promise<TTSModelConfig> {
-  if (typeof window === 'undefined') {
-    throw new Error('getCurrentTTSConfig() can only be called in browser context');
-  }
-
-  // Lazy import to avoid circular dependency
-  const { useSettingsStore } = await import('@/lib/store/settings');
-  const { ttsProviderId, ttsVoice, ttsSpeed, ttsProvidersConfig } = useSettingsStore.getState();
-
-  const providerConfig = ttsProvidersConfig?.[ttsProviderId];
-
-  return {
-    providerId: ttsProviderId,
-    modelId:
-      providerConfig?.modelId ||
-      TTS_PROVIDERS[ttsProviderId as keyof typeof TTS_PROVIDERS]?.defaultModelId ||
-      '',
-    apiKey: providerConfig?.apiKey,
-    baseUrl: providerConfig?.baseUrl || providerConfig?.customDefaultBaseUrl,
-    voice: ttsVoice,
-    speed: ttsSpeed,
-  };
 }
 
 // Re-export from constants for convenience
@@ -1409,7 +1426,11 @@ async function generateDoubaoTTS(
       req_params: {
         text,
         speaker: config.voice,
-        audio_params: { format: 'mp3', sample_rate: 24000, speech_rate: speechRate },
+        audio_params: {
+          format: 'mp3',
+          sample_rate: 24000,
+          speech_rate: speechRate,
+        },
       },
     }),
     signal,
