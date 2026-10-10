@@ -486,6 +486,28 @@ slots:
 
 Without `openmaic.yml`, the legacy variables `PDF_MINERU_CLOUD_API_KEY` or `PDF_MINERU_BASE_URL` in `.env.local` still work.
 
+### Optional: Server-Managed Edge TTS
+
+OpenMAIC can use an Edge TTS service that exposes the OpenAI-compatible `/audio/speech` endpoint. Configure it on the server so private or LAN endpoints never come from browser input:
+
+```yaml
+providers:
+  edge-tts:
+    preset: openai-tts
+    baseUrl: http://edge-tts-host:5050/v1
+    models: [tts-1]
+    options:
+      edgeTts: true
+      voice: zh-CN-XiaoxiaoNeural
+
+slots:
+  tts: edge-tts
+```
+
+The `voice` option is an operator-pinned voice. When the request uses the legacy `default` placeholder, OpenMAIC selects `zh-CN-XiaoxiaoNeural` for CJK text and `en-US-AriaNeural` otherwise. A managed Edge endpoint may omit an API key. Legacy `TTS_OPENAI_BASE_URL`, `TTS_OPENAI_MODELS`, and `TTS_OPENAI_VOICE` variables remain supported.
+
+---
+
 ### Optional: VoxCPM2 (Self-Hosted TTS with Voice Cloning)
 
 [VoxCPM2](https://github.com/OpenBMB/VoxCPM) is an open-source TTS model from OpenBMB with voice cloning. OpenMAIC ships an adapter; run VoxCPM on your own hardware and OpenMAIC will talk to it.

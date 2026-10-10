@@ -94,6 +94,31 @@ describe('OpenAI-compatible custom TTS', () => {
     ).rejects.toThrow("Invalid voice 'default'.");
   });
 
+  it('supports a keyless managed Edge endpoint and omits Authorization', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: () => 'audio/mpeg' },
+      arrayBuffer: async () => mp3Response(),
+    });
+
+    await generateTTS(
+      {
+        providerId: 'openai-tts',
+        baseUrl: 'http://edge.internal/v1',
+        voice: 'default',
+        managed: true,
+        providerOptions: { edgeTts: true },
+      },
+      '你好',
+    );
+
+    const request = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(request.headers).toEqual({
+      'Content-Type': 'application/json; charset=utf-8',
+    });
+    expect(JSON.parse(request.body as string).voice).toBe('zh-CN-XiaoxiaoNeural');
+  });
+
   it('maps the legacy default placeholder to an Edge neural voice by text language', async () => {
     mockFetch
       .mockResolvedValueOnce({

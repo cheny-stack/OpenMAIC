@@ -28,7 +28,12 @@ export function resolveOpenAIEdgeTTSDefaultVoice(
   baseUrl: string | undefined,
   voice: string,
   text: string,
+  forceEdgeTTS = false,
 ): string {
-  if (!isOpenAIEdgeTTSBaseUrl(baseUrl) || voice.trim().toLowerCase() !== 'default') return voice;
+  if (
+    (!forceEdgeTTS && !isOpenAIEdgeTTSBaseUrl(baseUrl)) ||
+    voice.trim().toLowerCase() !== 'default'
+  )
+    return voice;
   return CJK_TEXT.test(text) ? OPENAI_EDGE_TTS_DEFAULT_VOICE_ZH : OPENAI_EDGE_TTS_DEFAULT_VOICE_EN;
 }

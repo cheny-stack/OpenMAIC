@@ -89,6 +89,7 @@ export const LLM_ENV_MAP: Record<string, string> = {
 
 const TTS_ENV_MAP: Record<string, string> = {
   TTS_OPENAI: 'openai-tts',
+  TTS_MIMO: 'mimo-tts',
   TTS_AZURE: 'azure-tts',
   TTS_GLM: 'glm-tts',
   TTS_QWEN: 'qwen-tts',
@@ -247,10 +248,12 @@ function loadEnvSection(
     requiresBaseUrl = false,
     keylessProviders = new Set<string>(),
     baseUrlOptionalProviders = new Set<string>(),
+    allowBaseUrlOnly = false,
   }: {
     requiresBaseUrl?: boolean;
     keylessProviders?: Set<string>;
     baseUrlOptionalProviders?: Set<string>;
+    allowBaseUrlOnly?: boolean;
   } = {},
 ): Record<string, ServerProviderEntry> {
   const result: Record<string, ServerProviderEntry> = {};
@@ -263,7 +266,7 @@ function loadEnvSection(
       if (
         requiresBaseUrlForProvider(id)
           ? !!entry?.baseUrl
-          : entry?.apiKey || (entry?.baseUrl && keylessProviders.has(id))
+          : entry?.apiKey || (entry?.baseUrl && (keylessProviders.has(id) || allowBaseUrlOnly))
       ) {
         result[id] = {
           apiKey: entry.apiKey || '',
@@ -302,7 +305,7 @@ function loadEnvSection(
     if (
       requiresBaseUrlForProvider(providerId)
         ? !envBaseUrl
-        : !(envApiKey || (envBaseUrl && keylessProviders.has(providerId)))
+        : !(envApiKey || (envBaseUrl && (keylessProviders.has(providerId) || allowBaseUrlOnly)))
     )
       continue;
     result[providerId] = {
@@ -524,6 +527,7 @@ function buildConfig(yamlData: YamlData): ServerConfig {
     providers,
     tts: loadEnvSection(TTS_ENV_MAP, yamlData.tts, {
       keylessProviders: new Set(['voxcpm-tts', 'lemonade-tts']),
+      allowBaseUrlOnly: true,
     }),
     asr: loadEnvSection(ASR_ENV_MAP, yamlData.asr, {
       keylessProviders: new Set(['funasr-asr', 'lemonade-asr']),

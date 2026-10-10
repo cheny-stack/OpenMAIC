@@ -111,7 +111,7 @@ import {
   type VoxCPMProviderOptions,
 } from './voxcpm';
 import { createLogger } from '@/lib/logger';
-import { resolveOpenAIEdgeTTSDefaultVoice } from './openai-edge-tts';
+import { isOpenAIEdgeTTSBaseUrl, resolveOpenAIEdgeTTSDefaultVoice } from './openai-edge-tts';
 import {
   audioEndpointPolicy,
   audioProviderFetch,
@@ -122,6 +122,13 @@ import { appAttributionHeaders } from '@/lib/config/app-attribution';
 import { pcmS16leMonoToWav } from './pcm-wav';
 
 const log = createLogger('TTSProviders');
+
+export function isManagedEdgeTTSConfig(config: TTSModelConfig): boolean {
+  const options = config.providerOptions;
+  return (
+    config.managed === true && (options?.edgeTts === true || isOpenAIEdgeTTSBaseUrl(config.baseUrl))
+  );
+}
 
 /**
  * Every server-side provider request goes through the strict redirect +
@@ -299,7 +306,7 @@ export async function generateTTS(
   const provider = TTS_PROVIDERS[config.providerId as keyof typeof TTS_PROVIDERS];
 
   // Validate API key if required (only for built-in providers with known config)
-  if (provider?.requiresApiKey && !config.apiKey) {
+  if (provider?.requiresApiKey && !config.apiKey && !isManagedEdgeTTSConfig(config)) {
     throw new Error(`API key required for TTS provider: ${config.providerId}`);
   }
 
@@ -372,11 +379,13 @@ export function resolveTTSRequestVoice(
   baseUrl: string | undefined,
   voice: string,
   text: string,
+  edgeTts = false,
 ): string | undefined {
-  if (!isCustomTTSProvider(providerId) || voice.trim().toLowerCase() !== 'default') {
+  const isEdge = edgeTts || isOpenAIEdgeTTSBaseUrl(baseUrl);
+  if ((!isCustomTTSProvider(providerId) && !isEdge) || voice.trim().toLowerCase() !== 'default') {
     return voice;
   }
-  const resolved = resolveOpenAIEdgeTTSDefaultVoice(baseUrl, voice, text);
+  const resolved = resolveOpenAIEdgeTTSDefaultVoice(baseUrl, voice, text, edgeTts);
   return resolved.trim().toLowerCase() === 'default' ? undefined : resolved;
 }
 
@@ -393,13 +402,18 @@ async function generateOpenAITTS(
     '',
   );
   const speechUrl = baseUrl.endsWith('/audio/speech') ? baseUrl : `${baseUrl}/audio/speech`;
-  const voice = resolveOpenAIEdgeTTSDefaultVoice(baseUrl, config.voice, text);
+  const voice = resolveOpenAIEdgeTTSDefaultVoice(
+    baseUrl,
+    config.voice,
+    text,
+    config.providerOptions?.edgeTts === true,
+  );
 
   // Use gpt-4o-mini-tts for best quality and intelligent realtime applications
   const response = await ttsFetch(config, speechUrl, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${config.apiKey}`,
+      ...(config.apiKey?.trim() ? { Authorization: `Bearer ${config.apiKey.trim()}` } : {}),
       'Content-Type': 'application/json; charset=utf-8',
     },
     body: JSON.stringify({
@@ -419,14 +433,12 @@ async function generateOpenAITTS(
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: response.statusText }));
-    // Retain the response without changing the HTTP status used by route retries.
-    const options = { cause: { data: error } };
+    const { message: detail, data } = await readTTSApiErrorWithData(response);
+    // Retain the structured response so quota classification can inspect
+    // provider error codes, while the message exposes the useful detail.
+    const options = { cause: { data } };
     throwIfTtsRateLimited('OpenAI', response.status, response.headers?.get('retry-after'), options);
-    throw new Error(
-      `OpenAI TTS API error: ${error.error?.message || response.statusText}`,
-      options,
-    );
+    throw new Error(`OpenAI TTS API error (${response.status}): ${detail}`, options);
   }
 
   return await validateTTSAudioResponse(response, 'OpenAI');
@@ -849,21 +861,39 @@ async function postVoxCPMNanoVLLM(
   });
 }
 
-async function readTTSApiError(response: Response): Promise<string> {
-  const text = await response.text().catch(() => response.statusText);
-  if (!text) return response.statusText;
-  try {
-    const json = JSON.parse(text) as {
-      detail?: unknown;
-      error?: { message?: string } | string;
-    };
-    if (typeof json.detail === 'string') return json.detail;
-    if (typeof json.error === 'object' && json.error?.message) return json.error.message;
-    if (typeof json.error === 'string') return json.error;
-  } catch {
-    // Fall through to raw text.
+interface TTSApiErrorObject {
+  details?: unknown;
+  detail?: unknown;
+  error?: { message?: unknown; details?: unknown; detail?: unknown; code?: unknown } | string;
+}
+
+function ttsApiErrorMessage(data: TTSApiErrorObject, fallback: string): string {
+  if (typeof data.details === 'string') return data.details;
+  if (typeof data.detail === 'string') return data.detail;
+  if (typeof data.error === 'object' && data.error) {
+    if (typeof data.error.message === 'string') return data.error.message;
+    if (typeof data.error.details === 'string') return data.error.details;
+    if (typeof data.error.detail === 'string') return data.error.detail;
   }
-  return text;
+  if (typeof data.error === 'string') return data.error;
+  return fallback;
+}
+
+async function readTTSApiErrorWithData(
+  response: Response,
+): Promise<{ message: string; data: unknown }> {
+  const text = await response.text().catch(() => response.statusText);
+  if (!text) return { message: response.statusText, data: text };
+  try {
+    const data = JSON.parse(text) as TTSApiErrorObject;
+    return { message: ttsApiErrorMessage(data, text), data };
+  } catch {
+    return { message: text, data: text };
+  }
+}
+
+async function readTTSApiError(response: Response): Promise<string> {
+  return (await readTTSApiErrorWithData(response)).message;
 }
 
 /**
@@ -1219,6 +1249,105 @@ async function generateMiniMaxTTS(
     audio,
     format: data?.extra_info?.audio_format || config.format || 'mp3',
   };
+}
+
+/**
+ * MiMo V2.5 TTS implementation (OpenAI-compatible chat completions).
+ *
+ * MiMo receives delivery direction in the user message and the exact speech in
+ * the assistant message. The non-streaming response returns Base64 WAV bytes
+ * at `choices[0].message.audio.data`.
+ */
+async function generateMimoTTS(
+  config: TTSModelConfig,
+  text: string,
+  signal: AbortSignal,
+): Promise<TTSGenerationResult> {
+  const baseUrl = (config.baseUrl || TTS_PROVIDERS['mimo-tts'].defaultBaseUrl || '').replace(
+    /\/+$/,
+    '',
+  );
+  const endpoint = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+
+  const response = await ttsFetch(config, endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({
+      model: config.modelId || TTS_PROVIDERS['mimo-tts'].defaultModelId,
+      messages: [
+        { role: 'user', content: mimoDeliveryInstruction(config.speed) },
+        { role: 'assistant', content: text },
+      ],
+      audio: {
+        format: 'wav',
+        voice: config.voice || TTS_PROVIDERS['mimo-tts'].voices[0].id,
+      },
+      stream: false,
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    throwIfTtsRateLimited('MiMo', response.status);
+    throw new Error(`MiMo TTS API error (${response.status}): ${await readTTSApiError(response)}`);
+  }
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned malformed JSON');
+  }
+
+  const audioBase64 = (
+    data as {
+      choices?: Array<{ message?: { audio?: { data?: unknown } } }>;
+    }
+  )?.choices?.[0]?.message?.audio?.data;
+  if (typeof audioBase64 !== 'string' || !audioBase64.trim()) {
+    throw new TTSInvalidResponseError(
+      'MiMo',
+      'MiMo TTS response is missing choices[0].message.audio.data',
+    );
+  }
+
+  return {
+    audio: decodeMimoAudio(audioBase64),
+    format: 'wav',
+  };
+}
+
+/** Keep speed natural-language because MiMo exposes delivery through messages. */
+function mimoDeliveryInstruction(speed?: number): string {
+  const normalized = speed && Number.isFinite(speed) ? speed : 1;
+  if (Math.abs(normalized - 1) < 0.01) return 'Speak naturally and clearly.';
+  if (normalized < 1) {
+    return `Speak naturally and clearly at a slower pace, about ${normalized.toFixed(2)} times normal speed.`;
+  }
+  return `Speak naturally and clearly at a faster pace, about ${normalized.toFixed(2)} times normal speed.`;
+}
+
+function decodeMimoAudio(value: string): Uint8Array {
+  const compact = value.replace(/\s/g, '');
+  if (!compact || compact.length % 4 === 1 || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
+    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned invalid Base64 audio data');
+  }
+
+  const audio = new Uint8Array(Buffer.from(compact, 'base64'));
+  if (audio.length === 0) {
+    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned empty audio data');
+  }
+  if (
+    audio.length < 12 ||
+    Buffer.from(audio.subarray(0, 4)).toString('ascii') !== 'RIFF' ||
+    Buffer.from(audio.subarray(8, 12)).toString('ascii') !== 'WAVE'
+  ) {
+    throw new TTSInvalidResponseError('MiMo', 'MiMo TTS returned invalid WAV audio data');
+  }
+  return audio;
 }
 
 /**

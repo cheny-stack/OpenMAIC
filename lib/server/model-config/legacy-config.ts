@@ -72,6 +72,7 @@ function translateProvider(entry: ServerProviderEntry, presetId: string) {
     ...(entry.apiKey ? { apiKey: entry.apiKey } : {}),
     ...(entry.baseUrl ? { baseUrl: entry.baseUrl } : {}),
     ...(entry.models?.length ? { models: [...entry.models] } : {}),
+    ...(entry.voice ? { options: { voice: entry.voice } } : {}),
     ...(entry.proxy ? { proxy: entry.proxy } : {}),
     ...(Object.keys(credentials).length ? { credentials } : {}),
   };

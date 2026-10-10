@@ -4,12 +4,17 @@
  * request's deprecated provider fields) and mapping provider errors to its
  * responses.
  */
-import { generateTTS, type TTSGenerationResult } from '@/lib/audio/tts-providers';
+import {
+  generateTTS,
+  isManagedEdgeTTSConfig,
+  resolveTTSRequestVoice,
+  type TTSGenerationResult,
+} from '@/lib/audio/tts-providers';
 import { TTS_PROVIDERS, DEFAULT_TTS_VOICES, isQwenCloneVoice } from '@/lib/audio/constants';
 import type { TTSProviderId } from '@/lib/audio/types';
 import { VOXCPM_AUTO_VOICE_ID, VOXCPM_TTS_PROVIDER_ID } from '@/lib/audio/voxcpm';
 import { recordGenerationUsage } from '@/lib/server/usage-storage';
-import { resolveTTSModel, slotTTSModel } from '@/lib/server/provider-config';
+import { resolveTTSModel, resolveTTSVoice, slotTTSModel } from '@/lib/server/provider-config';
 import { adapterOptions, type MediaConnection } from '@/lib/server/model-config/media';
 
 import { StepRefusal, type StepContext } from './context';
@@ -41,7 +46,9 @@ export type NarrationRefusal =
   /** The automatic voice needs the agent's voice context. */
   | 'voice-context-required'
   /** The provider needs a key and none is configured. */
-  | 'missing-api-key';
+  | 'missing-api-key'
+  /** The provider received the legacy default placeholder but cannot resolve it. */
+  | 'invalid-voice';
 
 export interface NarrationResult extends TTSGenerationResult {
   providerId: string;
@@ -57,15 +64,46 @@ export async function synthesizeNarration(
   const trace = input.trace ?? {};
   const ttsProviderId = connection.providerId;
   trace.providerId = ttsProviderId;
-  // A voice belongs to its provider: the request's voice unless it was
-  // chosen for another provider, in which case the provider's default.
-  const ttsVoice =
+  const configuredVoice =
+    typeof connection.options?.voice === 'string' && connection.options.voice.trim()
+      ? connection.options.voice.trim()
+      : undefined;
+  const legacyManagedVoice =
+    connection.managed && connection.origin !== 'configuration'
+      ? resolveTTSVoice(ttsProviderId)
+      : undefined;
+  // A deployment-pinned voice is authoritative. Otherwise use the request's
+  // voice when it belongs to this provider, then the provider's default.
+  const requestedOrDefaultVoice =
     requestedVoice && (!requestedProviderId || requestedProviderId === ttsProviderId)
       ? requestedVoice
       : DEFAULT_TTS_VOICES[ttsProviderId as keyof typeof DEFAULT_TTS_VOICES] || requestedVoice;
-  trace.voice = ttsVoice;
+  const rawVoice = configuredVoice || legacyManagedVoice || requestedOrDefaultVoice;
+  const edgeTts = isManagedEdgeTTSConfig({
+    providerId: ttsProviderId as TTSProviderId,
+    apiKey: connection.apiKey,
+    baseUrl: connection.baseUrl,
+    voice: rawVoice || '',
+    providerOptions: connection.options,
+    managed: connection.managed,
+  });
+  const ttsVoice = rawVoice
+    ? resolveTTSRequestVoice(
+        ttsProviderId as TTSProviderId,
+        connection.baseUrl,
+        rawVoice,
+        text,
+        edgeTts,
+      )
+    : undefined;
+  trace.voice = ttsVoice || rawVoice;
   if (!ttsVoice) {
-    throw new StepRefusal<NarrationRefusal>('voice-missing', 'Missing required field: ttsVoice');
+    throw new StepRefusal<NarrationRefusal>(
+      rawVoice ? 'invalid-voice' : 'voice-missing',
+      rawVoice
+        ? 'Custom TTS providers require a concrete voice ID, such as zh-CN-XiaoxiaoNeural in Audio settings.'
+        : 'Missing required field: ttsVoice',
+    );
   }
 
   // Reject browser-native TTS — must be handled client-side
@@ -99,11 +137,20 @@ export async function synthesizeNarration(
   // under the strict public policy; only operator configuration may inherit
   // the operator's ALLOW_LOCAL_NETWORKS opt-in.
   const publicOnly = connection.userEndpoint;
+  const managedEdgeTTS = isManagedEdgeTTSConfig({
+    providerId: ttsProviderId as TTSProviderId,
+    apiKey,
+    baseUrl,
+    voice: ttsVoice,
+    providerOptions: connection.options,
+    managed,
+  });
 
   // Pre-flight the same key requirement the library enforces: a keyed provider
-  // with no key is a caller contract violation, not a server failure.
+  // with no key is a caller contract violation, not a server failure. Managed
+  // Edge TTS is intentionally keyless when the deployment owns its endpoint.
   const ttsProvider = TTS_PROVIDERS[ttsProviderId as keyof typeof TTS_PROVIDERS];
-  if (ttsProvider?.requiresApiKey && !apiKey) {
+  if (ttsProvider?.requiresApiKey && !apiKey && !managedEdgeTTS) {
     throw new StepRefusal<NarrationRefusal>(
       'missing-api-key',
       `No API key configured for TTS provider: ${ttsProviderId}`,

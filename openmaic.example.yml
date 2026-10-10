@@ -68,6 +68,17 @@ providers:
   #     accessKeyId: ${ALIDOCMIND_ACCESS_KEY_ID}
   #     accessKeySecret: ${ALIDOCMIND_ACCESS_KEY_SECRET}
 
+  # Server-managed Edge TTS through an OpenAI-compatible endpoint. The endpoint
+  # may be keyless; edgeTts enables default voice translation and voice pins the
+  # Microsoft neural voice sent to the backend.
+  # edge-tts:
+  #   preset: openai-tts
+  #   baseUrl: http://edge-tts-host:5050/v1
+  #   models: [tts-1]
+  #   options:
+  #     edgeTts: true
+  #     voice: zh-CN-XiaoxiaoNeural
+
 slots:
   # The default chat model. Every chat slot without an assignment of its own
   # follows it.
@@ -93,6 +104,7 @@ slots:
   # document services mostly have none to pick).
   # webSearch: tavily
   # image: openai-image:gpt-image-2
+  # tts: edge-tts
   # tts: minimax:speech-2.8-turbo
 
   # null turns a capability off by default; users may still turn it on

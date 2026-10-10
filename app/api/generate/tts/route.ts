@@ -11,7 +11,6 @@
 import { NextRequest } from 'next/server';
 import {
   QwenTTSError,
-  resolveTTSRequestVoice,
   TTSInvalidResponseError,
   TTSRateLimitError,
 } from '@/lib/audio/tts-providers';
@@ -20,6 +19,7 @@ import {
   isServerTTSProviderDisabled,
   resolveTTSApiKey,
   resolveTTSBaseUrl,
+  resolveTTSVoice,
   TTSModelNotAllowedError,
 } from '@/lib/server/provider-config';
 import type { TTSProviderId } from '@/lib/audio/types';
@@ -52,6 +52,7 @@ const REFUSAL_CODES: Record<NarrationRefusal, ApiErrorCode> = {
   'client-side-provider': 'INVALID_REQUEST',
   'voice-context-required': 'VOXCPM_AUTO_VOICE_REQUIRES_CONTEXT',
   'missing-api-key': 'MISSING_API_KEY',
+  'invalid-voice': 'INVALID_VOICE',
 };
 
 export async function POST(req: NextRequest) {
@@ -187,10 +188,12 @@ async function requestedTTSProvider(
     if (ssrfError) throw new RequestedProviderRefusedError(apiError('INVALID_URL', 403, ssrfError));
   }
   const baseUrl = resolveTTSBaseUrl(providerId, baseUrlFromClient);
+  const managedVoice = managed ? resolveTTSVoice(providerId) : undefined;
   return {
     providerId,
     apiKey: resolveTTSApiKey(providerId, managed ? undefined : clientApiKey || undefined),
     ...(baseUrl ? { baseUrl } : {}),
+    ...(managedVoice ? { options: { voice: managedVoice } } : {}),
     managed,
     userEndpoint: Boolean(baseUrlFromClient),
     origin: 'request',

@@ -72,6 +72,38 @@ describe('narration step', () => {
     );
   });
 
+  it('honors a managed Edge voice pin and allows a keyless configured endpoint', async () => {
+    const edgeConnection: MediaConnection = {
+      providerId: 'openai-tts',
+      baseUrl: 'http://edge.internal/v1',
+      options: { edgeTts: true, voice: 'zh-CN-XiaoxiaoNeural' },
+      managed: true,
+      userEndpoint: false,
+      origin: 'configuration',
+    };
+
+    await synthesizeNarration(
+      {
+        text: 'Hello',
+        audioId: 'a1',
+        connection: edgeConnection,
+        requestedVoice: 'alloy',
+      },
+      { log: testLogger() },
+    );
+
+    expect(mocks.generateTTS).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'openai-tts',
+        voice: 'zh-CN-XiaoxiaoNeural',
+        apiKey: '',
+        managed: true,
+        providerOptions: expect.objectContaining({ edgeTts: true, voice: 'zh-CN-XiaoxiaoNeural' }),
+      }),
+      'Hello',
+    );
+  });
+
   it("uses the provider's default voice for a voice chosen for another provider", async () => {
     await synthesizeNarration(
       {

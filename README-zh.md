@@ -437,6 +437,28 @@ slots:
 
 没有 `openmaic.yml` 时，在 `.env.local` 中设置旧版变量 `PDF_MINERU_CLOUD_API_KEY` 或 `PDF_MINERU_BASE_URL` 仍然有效。
 
+### 可选：服务端托管 Edge TTS
+
+OpenMAIC 支持通过 OpenAI 兼容的 `/audio/speech` 接口使用 Edge TTS。请在服务端配置端点，这样私有或局域网地址不会来自浏览器请求：
+
+```yaml
+providers:
+  edge-tts:
+    preset: openai-tts
+    baseUrl: http://edge-tts-host:5050/v1
+    models: [tts-1]
+    options:
+      edgeTts: true
+      voice: zh-CN-XiaoxiaoNeural
+
+slots:
+  tts: edge-tts
+```
+
+`voice` 是管理员固定的音色。请求使用旧版 `default` 占位音色时，中文等 CJK 文本会自动使用 `zh-CN-XiaoxiaoNeural`，其他文本使用 `en-US-AriaNeural`。服务端托管的 Edge 端点可以不配置 API Key。旧版 `TTS_OPENAI_BASE_URL`、`TTS_OPENAI_MODELS` 和 `TTS_OPENAI_VOICE` 变量仍然支持。
+
+---
+
 ### 可选：VoxCPM2（自托管 TTS，支持音色克隆）
 
 [VoxCPM2](https://github.com/OpenBMB/VoxCPM) 是 OpenBMB 开源的 TTS 模型，支持声音克隆。OpenMAIC 自带适配器，把 VoxCPM 跑在自己机器上即可对接。
