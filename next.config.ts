@@ -1,6 +1,9 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
+  // Allow browsers loading the dev server through these interfaces to access
+  // Next.js HMR, fonts, and other dev-only resources.
+  allowedDevOrigins: ['10.10.44.47', '110.42.238.102'],
   env: {
     // Pin even the unset/default value in both client and server bundles.
     // A runtime-only override must not disable the route the built client uses.
