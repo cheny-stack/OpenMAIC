@@ -40,6 +40,7 @@ const TTS_ENV_PREFIXES = [
   'TTS_VOXCPM',
   'TTS_DOUBAO',
   'TTS_ELEVENLABS',
+  'TTS_GOOGLE',
   'TTS_MINIMAX',
   'TTS_LEMONADE',
   'TTS_BROWSER_NATIVE',
@@ -116,6 +117,17 @@ describe('POST /api/generate/tts missing-key contract (#665)', () => {
     );
   });
 
+  it("keeps the request's voice on the server's provider when it names no provider", async () => {
+    yamlOverride = 'tts:\n  openai-tts:\n    apiKey: sk-server\n';
+    const { POST } = await import('@/app/api/generate/tts/route');
+
+    expect((await POST(ttsRequest({ ttsVoice: 'nova' }))).status).toBe(200);
+    expect(mocks.generateTTS).toHaveBeenLastCalledWith(
+      expect.objectContaining({ providerId: 'openai-tts', voice: 'nova' }),
+      'Hello',
+    );
+  });
+
   it('accepts a client-supplied key for an unmanaged keyed provider', async () => {
     const { POST } = await import('@/app/api/generate/tts/route');
     const res = await POST(
@@ -179,20 +191,27 @@ describe('POST /api/generate/tts missing-key contract (#665)', () => {
 
   it('refuses a client-supplied localhost base URL even with ALLOW_LOCAL_NETWORKS=true', async () => {
     // The local-network opt-in is for the operator's own providers, never for a
-    // client-chosen BYOK endpoint.
+    // client-chosen BYOK endpoint. A loopback literal is refused at the URL
+    // preflight, and the 403 must not tell the caller to set the flag; the
+    // supported alternative is an operator-managed provider.
     vi.stubEnv('ALLOW_LOCAL_NETWORKS', 'true');
     const { POST } = await import('@/app/api/generate/tts/route');
     const res = await POST(
       ttsRequest({
         ttsProviderId: 'voxcpm-tts',
         ttsVoice: 'auto',
-        ttsBaseUrl: 'http://localhost:8000/v1',
+        ttsBaseUrl: 'http://127.0.0.1:8000/v1',
       }),
     );
     const json = await res.json();
 
     expect(res.status).toBe(403);
-    expect(json).toMatchObject({ success: false, errorCode: 'INVALID_URL' });
+    expect(json).toMatchObject({
+      success: false,
+      errorCode: 'INVALID_URL',
+      error:
+        'Local/private network URLs are not allowed for a client-supplied endpoint. ALLOW_LOCAL_NETWORKS does not apply to this path. The endpoint must be a provider configured by the operator in openmaic.yml.',
+    });
     expect(mocks.generateTTS).not.toHaveBeenCalled();
   });
 

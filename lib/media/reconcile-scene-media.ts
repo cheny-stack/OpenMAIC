@@ -14,7 +14,6 @@
  * and rebuilding it would lose the identity the store's own migration relies
  * on.
  */
-import { isServerBackedMediaPersistence } from '@/lib/persistence/media-persistence';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import type { Scene, Stage } from '@/lib/types/stage';
 
@@ -25,38 +24,19 @@ import {
   stageMediaPlaceholders,
   type GeneratedMediaReferenceRewrite,
 } from './generated-media-references';
-import {
-  allocatedMediaReference,
-  pendingMediaAllocation,
-  takePendingMediaAllocations,
-} from './pending-media-allocations';
+import { allocatedMediaReference, takePendingMediaAllocations } from './pending-media-allocations';
 import { allocatedNarrationReference } from '@/lib/audio/narration-allocations';
 import { rewriteSceneNarrationReference } from '@/lib/audio/persist-narration-reference';
 
-/** Whether any placeholder this scene carries has bytes waiting for it. */
-export function sceneHasPendingMediaAllocation(scene: Scene): boolean {
-  const stageId = scene.stageId;
-  if (!stageId) return false;
-  for (const ref of sceneMediaPlaceholders(scene)) {
-    if (pendingMediaAllocation(stageId, ref)) return true;
-  }
-  return false;
-}
-
 export function reconcileSceneMediaAllocations(scene: Scene): void {
-  if (!isServerBackedMediaPersistence()) return;
   applyPendingMediaAllocationsToScene(scene);
 }
 
 /**
  * Drain every allocation this scene's placeholders claim, rewriting the scene
  * in place. Returns whether anything changed.
- *
- * Unguarded by the persistence mode on purpose: callers that already know they
- * are server-backed (the write-back funnel) must not pay for the check twice,
- * and the registry is empty in browser-only mode anyway.
  */
-export function applyPendingMediaAllocationsToScene(scene: Scene): boolean {
+function applyPendingMediaAllocationsToScene(scene: Scene): boolean {
   const stageId = scene.stageId;
   if (!stageId) return false;
 
@@ -118,8 +98,6 @@ export function applyKnownMediaAllocations(
   stage: Stage | null | undefined,
   scenes: readonly Scene[],
 ): { stage: Stage | null | undefined; scenes: readonly Scene[] } | null {
-  if (!isServerBackedMediaPersistence()) return null;
-
   const rewritesFor = (refs: Iterable<string>): GeneratedMediaReferenceRewrite[] => {
     const rewrites: GeneratedMediaReferenceRewrite[] = [];
     for (const ref of refs) {

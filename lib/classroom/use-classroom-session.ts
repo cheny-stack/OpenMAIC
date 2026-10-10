@@ -15,7 +15,6 @@ import {
   type ClassroomGenerationOwnership,
 } from '@/lib/classroom/stage-ownership-signal';
 import { clearPendingMediaAllocations } from '@/lib/media/pending-media-allocations';
-import { isServerBackedMediaPersistence } from '@/lib/persistence/media-persistence';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useStageStore } from '@/lib/store';
@@ -26,7 +25,6 @@ type ClassroomSurfaceVariant = 'page' | 'pane';
 interface ClassroomSessionOptions {
   readonly classroomId: string;
   readonly variant: ClassroomSurfaceVariant;
-  readonly stopGeneration: () => void;
 }
 
 interface ClassroomSession {
@@ -41,13 +39,12 @@ interface ClassroomSession {
 export function useClassroomSession({
   classroomId,
   variant,
-  stopGeneration,
 }: ClassroomSessionOptions): ClassroomSession {
   const mayGenerate = useMayGenerateForStage(classroomId);
 
   const refreshOwnership = useCallback(
     (isCurrent: () => boolean) => {
-      if (!isCurrent() || !isServerBackedMediaPersistence()) return;
+      if (!isCurrent()) return;
 
       const askOwnership = async (): Promise<ClassroomGenerationOwnership> => {
         try {
@@ -94,9 +91,7 @@ export function useClassroomSession({
     clearNarrationAllocations(classroomId);
     useWhiteboardHistoryStore.getState().clearHistory();
     useCanvasStore.getState().resetCanvasState();
-
-    return () => stopGeneration();
-  }, [classroomId, stopGeneration]);
+  }, [classroomId]);
 
   return { mayGenerate, refreshOwnership };
 }

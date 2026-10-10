@@ -48,6 +48,7 @@ export function SceneSidebar({
   const { scenes, currentSceneId, setCurrentSceneId, generatingOutlines, generationStatus } =
     useStageStore();
   const failedOutlines = useStageStore.use.failedOutlines();
+  const generationInterrupted = useStageStore.use.generationInterrupted();
   const viewportSize = useCanvasStore.use.viewportSize();
   const viewportRatio = useCanvasStore.use.viewportRatio();
 
@@ -343,7 +344,8 @@ export function SceneSidebar({
           {generatingOutlines.length > 0 &&
             (() => {
               const outline = generatingOutlines[0];
-              const isFailed = failedOutlines.some((f) => f.id === outline.id);
+              const isFailed =
+                generationInterrupted || failedOutlines.some((f) => f.id === outline.id);
               const isRetrying = retryingOutlineId === outline.id;
               const isPaused = generationStatus === 'paused';
               const isActive = currentSceneId === PENDING_SCENE_ID;
@@ -410,7 +412,7 @@ export function SceneSidebar({
                     <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
                       {isFailed ? (
                         <div className="flex items-center gap-1 text-xs font-medium text-red-500/90 dark:text-red-400">
-                          {onRetryOutline ? (
+                          {onRetryOutline && !generationInterrupted ? (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -430,7 +432,9 @@ export function SceneSidebar({
                           <span>
                             {isRetrying
                               ? t('generation.retryingScene')
-                              : t('stage.generationFailed')}
+                              : generationInterrupted
+                                ? t('stage.generationInterrupted')
+                                : t('stage.generationFailed')}
                           </span>
                         </div>
                       ) : (

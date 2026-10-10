@@ -215,25 +215,25 @@ describe('POST /api/access-code/verify — cookie', () => {
     expect(options.maxAge).toBe(ACCESS_TOKEN_MAX_AGE_SECONDS);
   });
 
-  it('marks the access cookie Secure in production', async () => {
+  it('marks the cookie Secure in production unless COOKIE_SECURE=0', async () => {
     vi.stubEnv('NODE_ENV', 'production');
-    const POST = await loadPost();
-
-    await POST(verifyRequest(ACCESS_CODE));
-
-    const [, , options] = mocks.cookieSet.mock.calls[0];
-    expect(options.secure).toBe(true);
-  });
-
-  it('honors COOKIE_SECURE=0 for production deployments served over plain HTTP', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('COOKIE_SECURE', '0');
-    const POST = await loadPost();
-
-    await POST(verifyRequest(ACCESS_CODE));
-
-    const [, , options] = mocks.cookieSet.mock.calls[0];
-    expect(options.secure).toBe(false);
+    try {
+      for (const [cookieSecure, secure] of [
+        [undefined, true],
+        ['0', false],
+        ['false', true],
+      ] as const) {
+        if (cookieSecure === undefined) vi.stubEnv('COOKIE_SECURE', undefined);
+        else vi.stubEnv('COOKIE_SECURE', cookieSecure);
+        mocks.cookieSet.mockReset();
+        const POST = await loadPost();
+        expect((await POST(verifyRequest(ACCESS_CODE))).status).toBe(200);
+        const [, , options] = mocks.cookieSet.mock.calls[0];
+        expect(options.secure).toBe(secure);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

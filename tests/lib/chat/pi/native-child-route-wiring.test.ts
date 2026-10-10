@@ -17,6 +17,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/server/resolve-model', () => ({ resolveModel: mocks.resolveModel }));
+// Model settings are the resolver's business (tests/server/model-config); the
+// persistence assertions below are about the whiteboard inventory alone.
+vi.mock('@/lib/server/model-config/runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/server/model-config/runtime')>()),
+  requestWorkspaceId: async () => null,
+}));
 vi.mock('@/lib/ai/llm', () => ({ streamLLM: mocks.streamLLM }));
 vi.mock('@/lib/web-search', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/web-search')>();
@@ -46,7 +52,6 @@ const envNames = [
   'OPENMAIC_ENABLE_PI_NATIVE_CHILD_SPOTLIGHT',
   'TAVILY_API_KEY',
   'TAVILY_BASE_URL',
-  'NEXT_PUBLIC_PERSISTENCE',
   'DATABASE_URL',
 ] as const;
 
@@ -282,7 +287,6 @@ describe('PR2 Native Child route production wiring', () => {
   }, 15_000);
 
   it('wires RuntimeStore WB inventory through the real route and completes an action-only Child', async () => {
-    process.env.NEXT_PUBLIC_PERSISTENCE = '1';
     process.env.DATABASE_URL = 'postgres://shared-provider-test';
     const directorResponses = [
       [toolCall('read-1', 'read_scene', { sceneId: 'scene-current' }), finish('tool-calls')],
@@ -419,7 +423,6 @@ describe('PR2 Native Child route production wiring', () => {
   }, 15_000);
 
   it('writes no whiteboard runtime for a deleted course', async () => {
-    process.env.NEXT_PUBLIC_PERSISTENCE = '1';
     process.env.DATABASE_URL = 'postgres://shared-provider-test';
     mocks.stageMetaQuery.mockResolvedValue({
       rows: [
@@ -491,7 +494,6 @@ describe('PR2 Native Child route production wiring', () => {
   }, 15_000);
 
   it('executes wb_draw_text → wb_delete through the production route in one Child', async () => {
-    process.env.NEXT_PUBLIC_PERSISTENCE = '1';
     process.env.DATABASE_URL = 'postgres://shared-provider-test';
     const directorResponses = [
       [toolCall('read-1', 'read_scene', { sceneId: 'scene-current' }), finish('tool-calls')],
@@ -645,7 +647,6 @@ describe('PR2 Native Child route production wiring', () => {
         }),
     },
   ])('keeps the Native WB bundle absent for $name', async ({ request }) => {
-    process.env.NEXT_PUBLIC_PERSISTENCE = '1';
     process.env.DATABASE_URL = 'postgres://shared-provider-test';
     const directorResponses = [
       [toolCall('read-1', 'read_scene', { sceneId: 'scene-current' }), finish('tool-calls')],
@@ -681,7 +682,6 @@ describe('PR2 Native Child route production wiring', () => {
   });
 
   it('refuses a rejected owner credential with 401 before any model work', async () => {
-    process.env.NEXT_PUBLIC_PERSISTENCE = '1';
     process.env.DATABASE_URL = 'postgres://shared-provider-test';
     rejectOwnerCredentials();
     const { POST } = await import('@/app/api/chat/pi/route');
@@ -717,7 +717,6 @@ describe('PR2 Native Child route production wiring', () => {
   });
 
   it('keeps Pi chat available without WB inventory when persistence initialization fails', async () => {
-    process.env.NEXT_PUBLIC_PERSISTENCE = '1';
     process.env.DATABASE_URL = 'postgres://unavailable-provider-test';
     mocks.getServerPersistenceProvider.mockRejectedValue(new Error('pool unavailable'));
     const directorResponses = [

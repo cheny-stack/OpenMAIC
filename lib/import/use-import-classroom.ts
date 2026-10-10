@@ -4,8 +4,8 @@ import { useState, useCallback, useRef } from 'react';
 import { nanoid } from 'nanoid';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { db, mediaFileKey } from '@/lib/utils/database';
-import type { AudioFileRecord } from '@/lib/utils/database';
+import { db, mediaFileKey } from '@/lib/device-storage/database';
+import type { AudioFileRecord } from '@/lib/device-storage/database';
 import type { GeneratedAgentConfig } from '@/lib/types/stage';
 import {
   agentConfigFromManifest,
@@ -19,7 +19,6 @@ import { canonicalizeLegacyScene, mutateDocument, type AppDocument } from '@/lib
 import { isConcreteMediaAddress } from '@/lib/media/resolve-media-ref';
 import { isGeneratedMediaPlaceholder } from '@/lib/media/media-ref';
 import { putAsset } from '@/lib/media/asset-pool';
-import { isServerBackedMediaPersistence } from '@/lib/persistence/media-persistence';
 import { isStorageFullFailure } from '@/lib/media/media-failure';
 import type JSZip from 'jszip';
 import type { AssetMeta, Slide } from '@openmaic/dsl';
@@ -27,20 +26,12 @@ import type { Stage } from '@/lib/types/stage';
 
 const log = createLogger('ImportClassroom');
 
-async function allocateImportedAsset(
-  blob: Blob,
-  meta: AssetMeta,
-  stageId: string,
-): Promise<string> {
+async function allocateImportedAsset(blob: Blob, meta: AssetMeta): Promise<string> {
   // A shared document must name stored bytes, not a browser-only cache key.
-  return isServerBackedMediaPersistence() ? putAsset(blob, meta, { stageId }) : nanoid();
+  return putAsset(blob, meta);
 }
 
 async function writeImportedMediaCache(write: () => Promise<unknown>): Promise<void> {
-  if (!isServerBackedMediaPersistence()) {
-    await write();
-    return;
-  }
   try {
     await write();
   } catch (error) {
@@ -229,14 +220,10 @@ export async function materializeImportedAudio(
     const zipEntry = zip.file(zipPath);
     if (!zipEntry) continue;
     const blob = await zipEntry.async('blob');
-    const audioId = await allocateImportedAsset(
-      blob,
-      {
-        contentType: importedAudioContentType(meta, blob.type),
-        ...(meta.duration === undefined ? {} : { durationSeconds: meta.duration }),
-      },
-      stageId,
-    );
+    const audioId = await allocateImportedAsset(blob, {
+      contentType: importedAudioContentType(meta, blob.type),
+      ...(meta.duration === undefined ? {} : { durationSeconds: meta.duration }),
+    });
     allocatedIds.push(audioId);
     pathToId.set(zipPath, audioId);
     const relativePath = zipPath.startsWith('audio/') ? zipPath.slice('audio/'.length) : zipPath;
@@ -300,7 +287,7 @@ export async function materializeImportedMedia(
     const posterEntry =
       type === 'video' ? zip.file(siblingPosterZipPath(zipPath, meta.mimeType)) : null;
     const posterBlob = posterEntry ? await posterEntry.async('blob') : undefined;
-    const mediaId = await allocateImportedAsset(blob, { contentType: mimeType }, stageId);
+    const mediaId = await allocateImportedAsset(blob, { contentType: mimeType });
     allocatedIds.push(mediaId);
     refToNewId.set(oldRef, mediaId);
 
@@ -332,11 +319,9 @@ export async function materializeImportedMedia(
       .map((oldPosterRef) => mappedString(mappings.refToNewId, oldPosterRef))
       .find((value): value is string => typeof value === 'string');
     if (!posterAssetId) {
-      posterAssetId = await allocateImportedAsset(
-        posterBlob,
-        { contentType: posterBlob.type || 'image/jpeg' },
-        stageId,
-      );
+      posterAssetId = await allocateImportedAsset(posterBlob, {
+        contentType: posterBlob.type || 'image/jpeg',
+      });
       allocatedIds.push(posterAssetId);
       const posterRef = posterAssetId;
       await writeImportedMediaCache(() =>

@@ -16,6 +16,7 @@ import type { AssetByteStoreRegistration } from '@/lib/server/persistence-hooks/
 // register() is exercised for its hook validation only.
 vi.mock('@/lib/persistence/asset-quota', () => ({ resolveAssetQuotaBytes: vi.fn() }));
 vi.mock('@/lib/persistence/asset-pending-ttl', () => ({ resolveAssetPendingTtlMs: vi.fn() }));
+vi.mock('@/lib/persistence/schema-boot-check', () => ({ startSchemaBootCheck: vi.fn() }));
 vi.mock('@/lib/persistence/asset-collector-schedule', () => ({
   startAssetCollectorSchedule: vi.fn(),
 }));
@@ -264,6 +265,7 @@ describe('boot validation', () => {
 
   it('fails the instrumentation register() hook, before the server serves a request', async () => {
     vi.stubEnv('NEXT_RUNTIME', 'nodejs');
+    vi.stubEnv('DATABASE_URL', 'postgres://hooks-test/openmaic');
     vi.stubEnv('ACCESS_CODE', 'demo-code-that-is-long-enough');
     vi.stubEnv('PERSISTENCE_SHARED_OWNER_ID', '');
     vi.stubEnv('ASSET_BYTE_EGRESS', 'redirect');

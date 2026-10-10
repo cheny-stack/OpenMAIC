@@ -15,11 +15,10 @@ import { subscribeAgentEventWakeup } from '@/lib/server/agent-runtime/event-noti
 import { authenticateRequestOwner } from '@/lib/server/identity/with-owner';
 import { getAgentSessionStore } from '@/lib/server/agent-runtime/store';
 import { isRetiredStoredOwner, retiredCredentialCookies } from '@/lib/persistence/owner-merges';
+import { resolveSetCookies } from '@/lib/server/identity/set-cookie';
 
 export const runtime = 'nodejs';
-// Self-hosted `next start` ignores maxDuration; Vercel's adapter can still use
-// it. The 25s heartbeat keeps this sparse stream active through idle periods.
-export const maxDuration = 300;
+// The 25s heartbeat keeps this sparse stream active through idle periods.
 
 // LISTEN/NOTIFY supplies low latency. This is deliberately retained as a
 // correctness fallback because NOTIFY is lossy across listener disconnects.
@@ -56,6 +55,8 @@ export async function GET(req: NextRequest) {
   // round trip. Nothing about the account is disclosed.
   if (await isRetiredStoredOwner(ownerId)) {
     for (const cookie of retiredCredentialCookies()) responseHeaders.append('Set-Cookie', cookie);
+    // Drop the renewal of the cookie these values clear.
+    resolveSetCookies(responseHeaders);
     responseHeaders.set('Content-Type', 'text/event-stream; charset=utf-8');
     responseHeaders.set('Cache-Control', 'no-cache, no-transform');
     return new Response(
