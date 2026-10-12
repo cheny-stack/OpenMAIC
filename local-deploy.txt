@@ -10,3 +10,8 @@
 
 
 OPENMAIC_DEPLOY_PASSWORD='...' ./scripts/deploy-remote.sh
+仅更新服务端运行配置（只上传本地 `.env.local`，不上传代码/课程，也不重新构建镜像）：
+
+OPENMAIC_DEPLOY_PASSWORD='...' ./scripts/update-remote-env.sh
+
+注意：`NEXT_PUBLIC_*` 等构建时配置不会通过此脚本进入前端 bundle；这类修改仍需运行完整部署脚本。脚本还会阻止缺少 `OPENMAIC_PUBLISH_ADDRESS=0.0.0.0` 或存在未迁移 `MODEL_ROUTES` 的配置更新，避免服务重启后不可访问。
